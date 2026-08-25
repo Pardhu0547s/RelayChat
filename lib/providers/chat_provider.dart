@@ -7,6 +7,7 @@ class ChatProvider extends ChangeNotifier {
   final BluetoothService _bluetoothService = BluetoothService();
   final List<ChatMessage> _messages = [];
   StreamSubscription<String>? _incomingSubscription;
+  final String _localPhoneId = "PHONE_001"; // In future, generate or load from prefs
 
   List<ChatMessage> get messages => List.unmodifiable(_messages);
 
@@ -16,37 +17,49 @@ class ChatProvider extends ChangeNotifier {
 
   void _listenToIncomingMessages() {
     _incomingSubscription = _bluetoothService.incomingMessages.listen((incomingText) {
-      final newMessage = ChatMessage(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        senderId: _bluetoothService.connectedDevice?.name ?? 'ESP32',
-        senderName: _bluetoothService.connectedDevice?.name ?? 'ESP32',
-        text: incomingText,
-        timestamp: DateTime.now(),
-        isOutgoing: false,
-        status: MessageStatus.delivered,
-      );
-      _messages.add(newMessage);
-      notifyListeners();
+      try {
+        final parsedMessage = ChatMessage.fromJson(incomingText, isOutgoing: false);
+        
+        if (parsedMessage.type == MessageType.ack) {
+          // Handle ACK by marking the message as delivered
+          final index = _messages.indexWhere((m) => m.id == parsedMessage.id);
+          if (index != -1) {
+            _messages[index] = _messages[index].copyWith(status: MessageStatus.delivered);
+            notifyListeners();
+          }
+        } else if (parsedMessage.type == MessageType.text) {
+          // Add as a new incoming message
+          _messages.add(parsedMessage);
+          notifyListeners();
+        }
+        // Handle other types later (status, etc.)
+      } catch (e) {
+        debugPrint('Failed to parse incoming message as JSON: $incomingText');
+      }
     });
   }
 
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty) return;
 
+    final receiverId = _bluetoothService.connectedDevice?.id ?? "UNKNOWN";
+    
     final outgoingMessage = ChatMessage(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      senderId: 'User',
-      senderName: 'You',
-      text: text.trim(),
+      id: "msg_${DateTime.now().millisecondsSinceEpoch}",
       timestamp: DateTime.now(),
+      type: MessageType.text,
+      senderId: _localPhoneId,
+      receiverId: receiverId,
+      text: text.trim(),
       isOutgoing: true,
-      status: MessageStatus.sent,
+      status: MessageStatus.sent, // Start as sent, updated to delivered when ACK received
     );
 
     _messages.add(outgoingMessage);
     notifyListeners();
 
-    await _bluetoothService.sendMessage(text.trim());
+    final jsonPayload = outgoingMessage.toJson();
+    await _bluetoothService.sendMessage(jsonPayload);
   }
 
   void clearChat() {

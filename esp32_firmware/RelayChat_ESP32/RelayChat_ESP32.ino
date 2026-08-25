@@ -1,4 +1,6 @@
 #include <NimBLEDevice.h>
+#include <ArduinoJson.h>
+#include "esp_mac.h"
 
 #define DEVICE_NAME "RelayChat_ESP32"
 
@@ -11,6 +13,15 @@ NimBLECharacteristic* txCharacteristic;
 
 // Client connection status
 bool deviceConnected = false;
+String nodeId = "";
+
+String generateNodeId() {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char id[15];
+    sprintf(id, "RC_%02X%02X%02X", mac[3], mac[4], mac[5]);
+    return String(id);
+}
 
 //----------------------------------------
 // Server Callbacks
@@ -43,18 +54,42 @@ class RXCallbacks : public NimBLECharacteristicCallbacks {
         std::string value = pCharacteristic->getValue();
 
         if (!value.empty()) {
-
             Serial.print("Received: ");
             Serial.println(value.c_str());
 
-            String reply = "ACK: ";
-            reply += value.c_str();
+            // Parse incoming JSON
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, value.c_str());
 
-            txCharacteristic->setValue(reply.c_str());
-            txCharacteristic->notify();
+            if (error) {
+                Serial.print("❌ JSON Parse Failed: ");
+                Serial.println(error.c_str());
+                return;
+            }
 
-            Serial.print("Sent: ");
-            Serial.println(reply);
+            const char* msgType = doc["type"] | "";
+            const char* msgId = doc["id"] | "";
+            const char* sender = doc["sender"] | "";
+
+            // If it's a text message, acknowledge it
+            if (strcmp(msgType, "text") == 0) {
+                JsonDocument replyDoc;
+                replyDoc["version"] = 1;
+                replyDoc["id"] = msgId; // reference the same message ID
+                replyDoc["type"] = "ack";
+                replyDoc["status"] = "received";
+                replyDoc["sender"] = nodeId;
+                replyDoc["receiver"] = sender;
+
+                String replyStr;
+                serializeJson(replyDoc, replyStr);
+
+                txCharacteristic->setValue(replyStr.c_str());
+                txCharacteristic->notify();
+
+                Serial.print("Sent ACK: ");
+                Serial.println(replyStr);
+            }
         }
     }
 };
@@ -66,9 +101,13 @@ void setup() {
 
     Serial.begin(115200);
 
+    nodeId = generateNodeId();
+
     Serial.println();
     Serial.println("===============================");
-    Serial.println(" RelayChat ESP32");
+    Serial.print(" RelayChat ESP32 (");
+    Serial.print(nodeId);
+    Serial.println(")");
     Serial.println("===============================");
 
     NimBLEDevice::init(DEVICE_NAME);
