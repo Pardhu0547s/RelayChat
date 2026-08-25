@@ -39,8 +39,8 @@ class ChatProvider extends ChangeNotifier {
     });
   }
 
-  Future<void> sendMessage(String text) async {
-    if (text.trim().isEmpty) return;
+  Future<void> sendMessage(String text, {bool isSos = false}) async {
+    if (text.trim().isEmpty && !isSos) return;
 
     // In Phase 1.5, we use logical Node IDs instead of MAC addresses. 
     // Since we don't store the exact ESP32 Node ID prior to connecting yet, 
@@ -50,10 +50,11 @@ class ChatProvider extends ChangeNotifier {
     final outgoingMessage = ChatMessage(
       id: "msg_${DateTime.now().millisecondsSinceEpoch}",
       timestamp: DateTime.now(),
-      type: MessageType.text,
+      type: isSos ? MessageType.sos : MessageType.text,
+      origin: _localPhoneId,
       senderId: _localPhoneId,
       receiverId: receiverId,
-      text: text.trim(),
+      text: isSos ? "SOS!" : text.trim(),
       isOutgoing: true,
       status: MessageStatus.sent, // Start as sent, updated to delivered when ACK received
     );
@@ -62,7 +63,7 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     // Convert to JSON and send over BLE with newline framing
-    final jsonPayload = outgoingMessage.toJson() + "\n";
+    final jsonPayload = '${outgoingMessage.toJson()}\n';
     await _bluetoothService.sendMessage(jsonPayload);
   }
 

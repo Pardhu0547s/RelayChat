@@ -109,6 +109,13 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           IconButton(
+            tooltip: 'Send SOS',
+            icon: const Icon(Icons.warning_rounded, color: Colors.redAccent),
+            onPressed: () {
+              Provider.of<ChatProvider>(context, listen: false).sendMessage('', isSos: true);
+            },
+          ),
+          IconButton(
             tooltip: 'Toggle Light / Dark Mode',
             icon: Icon(
               themeProvider.isDarkMode

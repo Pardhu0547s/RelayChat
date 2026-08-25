@@ -17,17 +17,25 @@ class MessageBubble extends StatelessWidget {
     final formattedTime = DateFormat('hh:mm a').format(message.timestamp);
     final isDark = AppColors.isDark(context);
 
-    final bg = isOutgoing
-        ? AppColors.getOutgoingBubble(context)
-        : AppColors.getIncomingBubble(context);
+    final isSos = message.type == MessageType.sos;
 
-    final textPrimary = isOutgoing && !isDark
-        ? const Color(0xFF0F5132)
-        : AppColors.getTextPrimary(context);
+    final bg = isSos 
+        ? Colors.redAccent.withValues(alpha: isDark ? 0.4 : 0.2)
+        : isOutgoing
+            ? AppColors.getOutgoingBubble(context)
+            : AppColors.getIncomingBubble(context);
 
-    final subtitleColor = isOutgoing && !isDark
-        ? const Color(0xFF198754)
-        : AppColors.getSubtitle(context);
+    final textPrimary = isSos
+        ? (isDark ? Colors.red.shade200 : Colors.red.shade900)
+        : isOutgoing && !isDark
+            ? const Color(0xFF0F5132)
+            : AppColors.getTextPrimary(context);
+
+    final subtitleColor = isSos
+        ? (isDark ? Colors.red.shade300 : Colors.red.shade700)
+        : isOutgoing && !isDark
+            ? const Color(0xFF198754)
+            : AppColors.getSubtitle(context);
 
     return Align(
       alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
@@ -46,9 +54,11 @@ class MessageBubble extends StatelessWidget {
             bottomRight: Radius.circular(isOutgoing ? 4 : 16),
           ),
           border: Border.all(
-            color: isOutgoing
-                ? AppColors.primary.withValues(alpha: 0.3)
-                : AppColors.getCardBorder(context),
+            color: isSos 
+                ? Colors.redAccent.withValues(alpha: 0.5)
+                : isOutgoing
+                    ? AppColors.primary.withValues(alpha: 0.3)
+                    : AppColors.getCardBorder(context),
             width: 1,
           ),
           boxShadow: [
