@@ -9,10 +9,10 @@ class ChatMessage {
   final DateTime timestamp;
   final MessageType type;
   final String origin;
-  final String senderId;
+  final String lastRelay;
   final String receiverId;
   final int hop;
-  final int maxHop;
+  final int ttl;
   final String text; // payload
   
   // Local UI state
@@ -26,10 +26,10 @@ class ChatMessage {
     required this.timestamp,
     this.type = MessageType.text,
     required this.origin,
-    required this.senderId,
+    required this.lastRelay,
     required this.receiverId,
     this.hop = 0,
-    this.maxHop = 3,
+    this.ttl = 8,
     required this.text,
     required this.isOutgoing,
     this.isEncrypted = false,
@@ -43,10 +43,10 @@ class ChatMessage {
       'timestamp': timestamp.millisecondsSinceEpoch ~/ 1000,
       'type': type.name,
       'origin': origin,
-      'sender': senderId,
+      'lastRelay': lastRelay,
       'receiver': receiverId,
       'hop': hop,
-      'maxHop': maxHop,
+      'ttl': ttl,
       'payload': text,
     };
   }
@@ -67,10 +67,10 @@ class ChatMessage {
           : DateTime.now(),
       type: parsedType,
       origin: map['origin'] ?? map['sender'] ?? '',
-      senderId: map['sender'] ?? '',
+      lastRelay: map['lastRelay'] ?? map['sender'] ?? '',
       receiverId: map['receiver'] ?? '',
       hop: map['hop']?.toInt() ?? 0,
-      maxHop: map['maxHop']?.toInt() ?? 3,
+      ttl: map['ttl']?.toInt() ?? 8,
       text: map['payload'] ?? '',
       isOutgoing: isOutgoing,
       status: status,
@@ -86,10 +86,10 @@ class ChatMessage {
     DateTime? timestamp,
     MessageType? type,
     String? origin,
-    String? senderId,
+    String? lastRelay,
     String? receiverId,
     int? hop,
-    int? maxHop,
+    int? ttl,
     String? text,
     bool? isOutgoing,
     bool? isEncrypted,
@@ -101,10 +101,10 @@ class ChatMessage {
       timestamp: timestamp ?? this.timestamp,
       type: type ?? this.type,
       origin: origin ?? this.origin,
-      senderId: senderId ?? this.senderId,
+      lastRelay: lastRelay ?? this.lastRelay,
       receiverId: receiverId ?? this.receiverId,
       hop: hop ?? this.hop,
-      maxHop: maxHop ?? this.maxHop,
+      ttl: ttl ?? this.ttl,
       text: text ?? this.text,
       isOutgoing: isOutgoing ?? this.isOutgoing,
       isEncrypted: isEncrypted ?? this.isEncrypted,

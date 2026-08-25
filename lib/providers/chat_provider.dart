@@ -52,7 +52,7 @@ class ChatProvider extends ChangeNotifier {
       timestamp: DateTime.now(),
       type: isSos ? MessageType.sos : MessageType.text,
       origin: _localPhoneId,
-      senderId: _localPhoneId,
+      lastRelay: _localPhoneId,
       receiverId: receiverId,
       text: isSos ? "SOS!" : text.trim(),
       isOutgoing: true,
