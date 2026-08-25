@@ -61,7 +61,8 @@ class ChatProvider extends ChangeNotifier {
     _messages.add(outgoingMessage);
     notifyListeners();
 
-    final jsonPayload = outgoingMessage.toJson();
+    // Convert to JSON and send over BLE with newline framing
+    final jsonPayload = outgoingMessage.toJson() + "\n";
     await _bluetoothService.sendMessage(jsonPayload);
   }
 

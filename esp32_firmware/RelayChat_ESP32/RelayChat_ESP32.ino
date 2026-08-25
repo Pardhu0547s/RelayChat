@@ -57,72 +57,90 @@ class RXCallbacks : public NimBLECharacteristicCallbacks {
 
         if (!value.empty()) {
             rxBuffer += value;
-
-            // Try to parse the buffer as a complete JSON object
-            JsonDocument doc;
-            DeserializationError error = deserializeJson(doc, rxBuffer.c_str());
-
-            if (error == DeserializationError::IncompleteInput) {
-                // The JSON is cut off (BLE MTU chunking). Wait for the next chunk.
-                return;
-            } else if (error) {
-                Serial.print("❌ JSON Parse Failed: ");
-                Serial.println(error.c_str());
-                rxBuffer.clear(); // Bad data, drop the buffer
+            
+            const size_t MAX_PACKET = 1024;
+            if (rxBuffer.length() > MAX_PACKET) {
+                Serial.println("❌ Packet too large, dropping buffer.");
+                rxBuffer.clear();
                 return;
             }
 
-            // We successfully parsed a complete JSON object!
-            Serial.print("Received: ");
-            Serial.println(rxBuffer.c_str());
-            rxBuffer.clear(); // Clear buffer for next message
+            while (true) {
+                size_t end = rxBuffer.find('\n');
+                if (end == std::string::npos) break;
 
-            const char* msgType = doc["type"] | "";
-            const char* msgId = doc["id"] | "";
-            const char* sender = doc["sender"] | "";
+                std::string packet = rxBuffer.substr(0, end);
+                rxBuffer.erase(0, end + 1);
 
-            // If it's a text message, acknowledge it
-            if (strcmp(msgType, "text") == 0) {
-                JsonDocument replyDoc;
-                replyDoc["version"] = 1;
-                replyDoc["id"] = msgId; 
-                replyDoc["type"] = "ack";
-                replyDoc["status"] = "received";
-                replyDoc["sender"] = nodeId;
-                replyDoc["receiver"] = sender;
-                replyDoc["timestamp"] = doc["timestamp"]; // Echo the exact timestamp from the phone
+                if (packet.empty()) continue;
 
-                String replyStr;
-                serializeJson(replyDoc, replyStr);
+                // Try to parse the complete JSON packet
+                JsonDocument doc;
+                DeserializationError error = deserializeJson(doc, packet.c_str());
 
-                txCharacteristic->setValue(replyStr.c_str());
-                txCharacteristic->notify();
+                if (error) {
+                    Serial.print("❌ JSON Parse Failed: ");
+                    Serial.println(error.c_str());
+                    continue;
+                }
 
-                Serial.print("Sent ACK: ");
-                Serial.println(replyStr);
-            }
-            // If it's a status request, reply with node info
-            else if (strcmp(msgType, "status") == 0) {
-                JsonDocument replyDoc;
-                replyDoc["version"] = 1;
-                replyDoc["type"] = "status";
-                replyDoc["nodeId"] = nodeId;
-                replyDoc["deviceName"] = "RelayChat ESP32";
-                replyDoc["firmware"] = "1.0.0";
-                replyDoc["hardware"] = "ESP32-WROOM-32";
-                replyDoc["protocol"] = 1;
-                
-                JsonArray capabilities = replyDoc["capabilities"].to<JsonArray>();
-                capabilities.add("BLE");
-                
-                String replyStr;
-                serializeJson(replyDoc, replyStr);
+                // We successfully parsed a complete JSON object!
+                Serial.println();
+                Serial.println("========== RECEIVED ==========");
+                Serial.println(packet.c_str());
+                Serial.println("==============================");
 
-                txCharacteristic->setValue(replyStr.c_str());
-                txCharacteristic->notify();
+                const char* msgType = doc["type"] | "";
+                const char* msgId = doc["id"] | "";
+                const char* sender = doc["sender"] | "";
 
-                Serial.print("Sent Status: ");
-                Serial.println(replyStr);
+                // If it's a text message, acknowledge it
+                if (strcmp(msgType, "text") == 0) {
+                    JsonDocument replyDoc;
+                    replyDoc["version"] = 1;
+                    replyDoc["id"] = msgId; 
+                    replyDoc["type"] = "ack";
+                    replyDoc["status"] = "received";
+                    replyDoc["sender"] = nodeId;
+                    replyDoc["receiver"] = sender;
+                    replyDoc["timestamp"] = doc["timestamp"]; // Echo the exact timestamp from the phone
+
+                    String replyStr;
+                    serializeJson(replyDoc, replyStr);
+
+                    txCharacteristic->setValue(replyStr.c_str());
+                    txCharacteristic->notify();
+
+                    Serial.println();
+                    Serial.println("========== SENT ACK ==========");
+                    Serial.println(replyStr);
+                    Serial.println("==============================");
+                }
+                // If it's a status request, reply with node info
+                else if (strcmp(msgType, "status") == 0) {
+                    JsonDocument replyDoc;
+                    replyDoc["version"] = 1;
+                    replyDoc["type"] = "status";
+                    replyDoc["nodeId"] = nodeId;
+                    replyDoc["deviceName"] = "RelayChat ESP32";
+                    replyDoc["firmware"] = "1.0.0";
+                    replyDoc["hardware"] = "ESP32-WROOM-32";
+                    replyDoc["protocol"] = 1;
+                    
+                    JsonArray capabilities = replyDoc["capabilities"].to<JsonArray>();
+                    capabilities.add("BLE");
+                    
+                    String replyStr;
+                    serializeJson(replyDoc, replyStr);
+
+                    txCharacteristic->setValue(replyStr.c_str());
+                    txCharacteristic->notify();
+
+                    Serial.println();
+                    Serial.println("======== SENT STATUS =========");
+                    Serial.println(replyStr);
+                    Serial.println("==============================");
+                }
             }
         }
     }
