@@ -47,6 +47,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 // RX Callback
 //----------------------------------------
 
+std::string rxBuffer = "";
+
 class RXCallbacks : public NimBLECharacteristicCallbacks {
 
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
@@ -54,18 +56,26 @@ class RXCallbacks : public NimBLECharacteristicCallbacks {
         std::string value = pCharacteristic->getValue();
 
         if (!value.empty()) {
-            Serial.print("Received: ");
-            Serial.println(value.c_str());
+            rxBuffer += value;
 
-            // Parse incoming JSON
+            // Try to parse the buffer as a complete JSON object
             JsonDocument doc;
-            DeserializationError error = deserializeJson(doc, value.c_str());
+            DeserializationError error = deserializeJson(doc, rxBuffer.c_str());
 
-            if (error) {
+            if (error == DeserializationError::IncompleteInput) {
+                // The JSON is cut off (BLE MTU chunking). Wait for the next chunk.
+                return;
+            } else if (error) {
                 Serial.print("❌ JSON Parse Failed: ");
                 Serial.println(error.c_str());
+                rxBuffer.clear(); // Bad data, drop the buffer
                 return;
             }
+
+            // We successfully parsed a complete JSON object!
+            Serial.print("Received: ");
+            Serial.println(rxBuffer.c_str());
+            rxBuffer.clear(); // Clear buffer for next message
 
             const char* msgType = doc["type"] | "";
             const char* msgId = doc["id"] | "";
@@ -75,12 +85,12 @@ class RXCallbacks : public NimBLECharacteristicCallbacks {
             if (strcmp(msgType, "text") == 0) {
                 JsonDocument replyDoc;
                 replyDoc["version"] = 1;
-                replyDoc["id"] = msgId; // reference the same message ID
+                replyDoc["id"] = msgId; 
                 replyDoc["type"] = "ack";
                 replyDoc["status"] = "received";
                 replyDoc["sender"] = nodeId;
                 replyDoc["receiver"] = sender;
-                replyDoc["timestamp"] = millis() / 1000; // Basic timestamp since boot
+                replyDoc["timestamp"] = doc["timestamp"]; // Echo the exact timestamp from the phone
 
                 String replyStr;
                 serializeJson(replyDoc, replyStr);
