@@ -42,7 +42,10 @@ class ChatProvider extends ChangeNotifier {
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty) return;
 
-    final receiverId = _bluetoothService.connectedDevice?.id ?? "UNKNOWN";
+    // In Phase 1.5, we use logical Node IDs instead of MAC addresses. 
+    // Since we don't store the exact ESP32 Node ID prior to connecting yet, 
+    // we use BROADCAST, and the connected node will respond with its actual ID.
+    final receiverId = "BROADCAST";
     
     final outgoingMessage = ChatMessage(
       id: "msg_${DateTime.now().millisecondsSinceEpoch}",

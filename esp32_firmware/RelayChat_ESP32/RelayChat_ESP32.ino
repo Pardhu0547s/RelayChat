@@ -80,6 +80,7 @@ class RXCallbacks : public NimBLECharacteristicCallbacks {
                 replyDoc["status"] = "received";
                 replyDoc["sender"] = nodeId;
                 replyDoc["receiver"] = sender;
+                replyDoc["timestamp"] = millis() / 1000; // Basic timestamp since boot
 
                 String replyStr;
                 serializeJson(replyDoc, replyStr);
@@ -88,6 +89,29 @@ class RXCallbacks : public NimBLECharacteristicCallbacks {
                 txCharacteristic->notify();
 
                 Serial.print("Sent ACK: ");
+                Serial.println(replyStr);
+            }
+            // If it's a status request, reply with node info
+            else if (strcmp(msgType, "status") == 0) {
+                JsonDocument replyDoc;
+                replyDoc["version"] = 1;
+                replyDoc["type"] = "status";
+                replyDoc["nodeId"] = nodeId;
+                replyDoc["deviceName"] = "RelayChat ESP32";
+                replyDoc["firmware"] = "1.0.0";
+                replyDoc["hardware"] = "ESP32-WROOM-32";
+                replyDoc["protocol"] = 1;
+                
+                JsonArray capabilities = replyDoc["capabilities"].to<JsonArray>();
+                capabilities.add("BLE");
+                
+                String replyStr;
+                serializeJson(replyDoc, replyStr);
+
+                txCharacteristic->setValue(replyStr.c_str());
+                txCharacteristic->notify();
+
+                Serial.print("Sent Status: ");
                 Serial.println(replyStr);
             }
         }
