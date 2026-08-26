@@ -12,8 +12,8 @@ class BluetoothService {
   factory BluetoothService() => _instance;
   BluetoothService._internal();
 
-  final StreamController<String> _incomingMessageController = StreamController<String>.broadcast();
-  Stream<String> get incomingMessages => _incomingMessageController.stream;
+  final StreamController<Uint8List> _incomingDataController = StreamController<Uint8List>.broadcast();
+  Stream<Uint8List> get incomingData => _incomingDataController.stream;
 
   final StreamController<double> _connectionProgressController = StreamController<double>.broadcast();
   Stream<double> get connectionProgress => _connectionProgressController.stream;
@@ -268,9 +268,8 @@ class BluetoothService {
       if (_rxCharacteristic != null) {
         await _rxCharacteristic!.setNotifyValue(true);
         _rxCharacteristic!.onValueReceived.listen((value) {
-          final receivedText = String.fromCharCodes(value);
-          if (receivedText.isNotEmpty) {
-            _incomingMessageController.add(receivedText);
+          if (value.isNotEmpty) {
+            _incomingDataController.add(Uint8List.fromList(value));
           }
         });
       }
@@ -329,8 +328,28 @@ class BluetoothService {
     }
   }
 
+  Future<bool> sendBytes(Uint8List bytes) async {
+    if (_connectedDevice == null) return false;
+
+    try {
+      if (_txCharacteristic != null) {
+        await _txCharacteristic!.write(
+          bytes,
+          withoutResponse: _txCharacteristic!.properties.writeWithoutResponse,
+        );
+        return true;
+      } else {
+        debugPrint('TX Characteristic not found — cannot send bytes');
+        return false;
+      }
+    } catch (e) {
+      debugPrint('BLE Send bytes error: $e');
+      return false;
+    }
+  }
+
   void dispose() {
-    _incomingMessageController.close();
+    _incomingDataController.close();
     _connectionProgressController.close();
     _deviceDisconnectedController.close();
   }

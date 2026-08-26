@@ -39,6 +39,9 @@ dependencies:
   permission_handler: ^11.3.7
   google_fonts: ^8.2.1
   intl: ^0.20.3
+  record: ^7.1.1
+  audioplayers: ^6.8.1
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

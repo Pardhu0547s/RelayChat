@@ -221,6 +221,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 onSend: (text) {
                   chatProvider.sendMessage(text, targetId);
                 },
+                onSendVoice: (bytes) {
+                  chatProvider.sendVoiceBytes(bytes, targetId);
+                },
               ),
             ],
           );
