@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
 import '../models/message.dart';
 import '../models/user.dart';
 import '../services/bluetooth_service.dart';
@@ -19,24 +20,34 @@ class ChatProvider extends ChangeNotifier {
   final Map<String, List<Uint8List>> _voiceBuffers = {};
   
   StreamSubscription<Uint8List>? _incomingSubscription;
+  StreamSubscription<double>? _connectionSubscription;
   Timer? _helloTimer;
   
-  final String localPhoneId = "PHONE_001";
+  late final String localPhoneId;
   final String localName = "Pavan";
 
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   List<DiscoveredUser> get discoveredUsers => _discoveredUsers.values.toList()..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
 
   ChatProvider() {
+    localPhoneId = "PHONE_${const Uuid().v4().substring(0, 6).toUpperCase()}";
     _listenToIncomingData();
     _startHelloBroadcast();
   }
   
   void _startHelloBroadcast() {
-     _helloTimer = Timer.periodic(const Duration(seconds: 20), (_) {
-         _broadcastHello();
+     _connectionSubscription = _bluetoothService.connectionProgress.listen((progress) {
+       if (progress == 1.0) {
+         // Connected!
+         Future.delayed(const Duration(seconds: 2), _broadcastHello);
+       }
      });
-     Future.delayed(const Duration(seconds: 1), _broadcastHello);
+
+     _helloTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+         if (_bluetoothService.connectedDevice != null) {
+           _broadcastHello();
+         }
+     });
   }
   
   Future<void> _broadcastHello() async {
@@ -278,6 +289,7 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _incomingSubscription?.cancel();
+    _connectionSubscription?.cancel();
     _helloTimer?.cancel();
     super.dispose();
   }

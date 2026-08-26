@@ -231,6 +231,14 @@ class BluetoothService {
         timeout: const Duration(seconds: 10),
       );
       
+      if (Platform.isAndroid) {
+        try {
+          await nativeDevice.requestMtu(512);
+        } catch (e) {
+          debugPrint('MTU Request failed: $e');
+        }
+      }
+      
       // Listen for unexpected disconnections
       nativeDevice.connectionState.listen((state) {
         if (state == fbp.BluetoothConnectionState.disconnected) {
