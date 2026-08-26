@@ -10,6 +10,7 @@ import 'screens/chat/chat_screen.dart';
 import 'screens/connection/connected_device_screen.dart';
 import 'screens/connection/connecting_screen.dart';
 import 'screens/scanner/device_scanner_screen.dart';
+import 'screens/contacts/contacts_screen.dart';
 import 'screens/splash/splash_screen.dart';
 import 'utils/colors.dart';
 import 'utils/constants.dart';
@@ -74,6 +75,7 @@ class RelayChatApp extends StatelessWidget {
               AppConstants.routeScanner: (context) => const DeviceScannerScreen(),
               AppConstants.routeConnecting: (context) => const ConnectingScreen(),
               AppConstants.routeConnectedDevice: (context) => const ConnectedDeviceScreen(),
+              AppConstants.routeContacts: (context) => const ContactsScreen(),
               AppConstants.routeChat: (context) => const ChatScreen(),
             },
           );

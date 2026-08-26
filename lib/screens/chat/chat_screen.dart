@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../models/user.dart';
 import '../../providers/bluetooth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/theme_provider.dart';
@@ -20,6 +21,8 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   StreamSubscription<bool>? _disconnectSub;
+  DiscoveredUser? _targetUser;
+  bool _isInit = false;
 
   @override
   void initState() {
@@ -33,6 +36,18 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_isInit) {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is DiscoveredUser) {
+        _targetUser = args;
+      }
+      _isInit = true;
+    }
   }
 
   void _scrollToBottom() {
@@ -56,9 +71,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final btProvider = Provider.of<BluetoothProvider>(context);
     final themeProvider = Provider.of<ThemeProvider>(context);
-    final deviceName = btProvider.connectedDevice?.name ?? 'ESP32_01';
+    final targetName = _targetUser?.name ?? 'Broadcast Channel';
+    final targetId = _targetUser?.phoneId ?? 'BROADCAST';
 
     final textPrimary = AppColors.getTextPrimary(context);
     final cardBg = AppColors.getCard(context);
@@ -75,7 +90,7 @@ class _ChatScreenState extends State<ChatScreen> {
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: textPrimary),
           onPressed: () {
-            Navigator.pushReplacementNamed(context, AppConstants.routeConnectedDevice);
+            Navigator.pop(context);
           },
         ),
         title: Column(
@@ -83,7 +98,7 @@ class _ChatScreenState extends State<ChatScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              deviceName,
+              targetName,
               style: TextStyle(
                 color: textPrimary,
                 fontSize: 18,
@@ -91,14 +106,14 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             const SizedBox(height: 2),
-            const Row(
+            Row(
               children: [
                 StatusBadge(
-                  label: 'Connected',
+                  label: targetId,
                   isPositive: true,
                 ),
-                SizedBox(width: 8),
-                StatusBadge(
+                const SizedBox(width: 8),
+                const StatusBadge(
                   label: 'Encryption: Off',
                   customIcon: Icons.lock_outline,
                   customColor: AppColors.secondary,
@@ -112,7 +127,8 @@ class _ChatScreenState extends State<ChatScreen> {
             tooltip: 'Send SOS',
             icon: const Icon(Icons.warning_rounded, color: Colors.redAccent),
             onPressed: () {
-              Provider.of<ChatProvider>(context, listen: false).sendMessage('', isSos: true);
+              Provider.of<ChatProvider>(context, listen: false)
+                  .sendMessage('', 'BROADCAST', isSos: true);
             },
           ),
           IconButton(
@@ -135,22 +151,10 @@ class _ChatScreenState extends State<ChatScreen> {
             onSelected: (value) {
               if (value == 'clear') {
                 Provider.of<ChatProvider>(context, listen: false).clearChat();
-              } else if (value == 'device_info') {
-                Navigator.pushNamed(context, AppConstants.routeConnectedDevice);
               }
             },
             itemBuilder: (BuildContext context) {
               return [
-                PopupMenuItem<String>(
-                  value: 'device_info',
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline, color: textPrimary, size: 18),
-                      const SizedBox(width: 8),
-                      Text('Device Details', style: TextStyle(color: textPrimary)),
-                    ],
-                  ),
-                ),
                 const PopupMenuItem<String>(
                   value: 'clear',
                   child: Row(
@@ -169,7 +173,7 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Consumer<ChatProvider>(
         builder: (context, chatProvider, child) {
           _scrollToBottom();
-          final messages = chatProvider.messages;
+          final messages = chatProvider.getMessagesForUser(targetId);
 
           return Column(
             children: [
@@ -180,7 +184,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 color: background,
                 child: Center(
                   child: Text(
-                    'Messages',
+                    'Private Chat',
                     style: TextStyle(
                       color: subtitleColor,
                       fontSize: 13,
@@ -197,7 +201,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: messages.isEmpty
                     ? Center(
                         child: Text(
-                          'No messages yet. Send a message to ESP32 node.',
+                          'No messages yet. Say hi to $targetName!',
                           style: TextStyle(color: subtitleColor),
                         ),
                       )
@@ -215,7 +219,7 @@ class _ChatScreenState extends State<ChatScreen> {
               // Future-Proof Input Bar (📎 Message... 🎤 ➤)
               MessageBox(
                 onSend: (text) {
-                  chatProvider.sendMessage(text);
+                  chatProvider.sendMessage(text, targetId);
                 },
               ),
             ],

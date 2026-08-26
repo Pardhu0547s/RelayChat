@@ -162,14 +162,14 @@ class _ConnectedDeviceScreenState extends State<ConnectedDeviceScreen> {
 
             // Open Chat Button
             AppButton(
-              label: 'Open Chat',
-              icon: Icons.chat_rounded,
+              label: 'Open Contacts',
+              icon: Icons.contacts_rounded,
               style: AppButtonStyle.primary,
               width: double.infinity,
               onPressed: () {
                 Navigator.pushReplacementNamed(
                   context,
-                  AppConstants.routeChat,
+                  AppConstants.routeContacts,
                 );
               },
             ),

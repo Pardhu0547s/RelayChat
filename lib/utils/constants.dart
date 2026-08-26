@@ -9,6 +9,7 @@ class AppConstants {
   static const String routeScanner = '/scanner';
   static const String routeConnecting = '/connecting';
   static const String routeConnectedDevice = '/connected_device';
+  static const String routeContacts = '/contacts';
   static const String routeChat = '/chat';
   
   // Bluetooth Service UUIDs (Sample RelayChat BLE Service)
