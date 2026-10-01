@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:audioplayers/audioplayers.dart';
+import '../../models/message.dart';
 import '../../models/user.dart';
 import '../../providers/bluetooth_provider.dart';
 import '../../providers/chat_provider.dart';
@@ -93,34 +95,13 @@ class _ChatScreenState extends State<ChatScreen> {
             Navigator.pop(context);
           },
         ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              targetName,
-              style: TextStyle(
-                color: textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Row(
-              children: [
-                StatusBadge(
-                  label: targetId,
-                  isPositive: true,
-                ),
-                const SizedBox(width: 8),
-                const StatusBadge(
-                  label: 'Encryption: Off',
-                  customIcon: Icons.lock_outline,
-                  customColor: AppColors.secondary,
-                ),
-              ],
-            ),
-          ],
+        title: Text(
+          targetName,
+          style: TextStyle(
+            color: textPrimary,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         actions: [
           IconButton(
@@ -129,6 +110,9 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: () {
               Provider.of<ChatProvider>(context, listen: false)
                   .sendMessage('', 'BROADCAST', isSos: true);
+              
+              final player = AudioPlayer();
+              player.play(AssetSource('Sounds/soundreality-sos-signal-137144.mp3'));
             },
           ),
           IconButton(
@@ -173,7 +157,12 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Consumer<ChatProvider>(
         builder: (context, chatProvider, child) {
           _scrollToBottom();
+          final String targetId = _targetUser?.phoneId ?? '';
           final messages = chatProvider.getMessagesForUser(targetId);
+          final currentUser = chatProvider.discoveredUsers.firstWhere(
+            (u) => u.phoneId == targetId,
+            orElse: () => _targetUser!,
+          );
 
           return Column(
             children: [
@@ -182,16 +171,46 @@ class _ChatScreenState extends State<ChatScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 color: background,
-                child: Center(
-                  child: Text(
-                    'Private Chat',
-                    style: TextStyle(
-                      color: subtitleColor,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1,
+                child: Column(
+                  children: [
+                    Text(
+                      currentUser.name,
+                      style: TextStyle(
+                        color: subtitleColor,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1,
+                      ),
                     ),
-                  ),
+                    if (currentUser.distance > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4.0),
+                        child: Text(
+                          '≈ ${currentUser.distance.toStringAsFixed(1)}m away',
+                          style: TextStyle(
+                            color: AppColors.primary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const StatusBadge(
+                          label: 'Connected via LoRa',
+                          isPositive: true,
+                        ),
+                        const SizedBox(width: 8),
+                        const StatusBadge(
+                          label: 'Encryption: Off',
+                          customIcon: Icons.lock_outline,
+                          customColor: AppColors.secondary,
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
               Divider(color: dividerColor, height: 1),
@@ -223,6 +242,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
                 onSendVoice: (bytes) {
                   chatProvider.sendVoiceBytes(bytes, targetId);
+                },
+                onSendImage: (bytes) {
+                  chatProvider.sendImageBytes(bytes, targetId);
+                },
+                onSendLocation: (locStr) {
+                  chatProvider.sendLocation(locStr, targetId);
                 },
               ),
             ],

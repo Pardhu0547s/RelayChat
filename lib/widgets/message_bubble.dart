@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/message.dart';
 import '../utils/colors.dart';
 
@@ -81,6 +83,8 @@ class _MessageBubbleState extends State<MessageBubble> {
 
     final isSos = message.type == MessageType.sos;
     final isVoice = message.type == MessageType.voice;
+    final isLocation = message.type == MessageType.location;
+    final isImage = message.type == MessageType.image;
 
     final bg = isSos 
         ? Colors.redAccent.withValues(alpha: isDark ? 0.4 : 0.2)
@@ -151,6 +155,41 @@ class _MessageBubbleState extends State<MessageBubble> {
                     style: TextStyle(color: textPrimary, fontSize: 14),
                   ),
                 ],
+              )
+            else if (isLocation)
+              GestureDetector(
+                onTap: () async {
+                  final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=${message.text}');
+                  if (await canLaunchUrl(url)) {
+                    await launchUrl(url);
+                  }
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.location_on, color: Colors.redAccent),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Location Shared',
+                      style: TextStyle(
+                        color: textPrimary,
+                        fontSize: 16,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (isImage)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.file(
+                  File(message.text),
+                  width: 150,
+                  height: 150,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Icon(Icons.broken_image, size: 50, color: textPrimary),
+                ),
               )
             else
               Text(

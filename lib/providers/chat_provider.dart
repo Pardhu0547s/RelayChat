@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/message.dart';
 import '../models/user.dart';
@@ -16,194 +16,317 @@ class ChatProvider extends ChangeNotifier {
   final List<ChatMessage> _messages = [];
   final Map<String, DiscoveredUser> _discoveredUsers = {};
   
-  // Voice chunk buffers
   final Map<String, List<Uint8List>> _voiceBuffers = {};
+  final Map<String, List<Uint8List>> _imageBuffers = {};
   
-  StreamSubscription<Uint8List>? _incomingSubscription;
-  StreamSubscription<double>? _connectionSubscription;
+  StreamSubscription<Frame>? _incomingSubscription;
   Timer? _helloTimer;
   
-  late final String localPhoneId;
-  final String localName = "Pavan";
+  final Uuid _uuid = const Uuid();
+  late Uint8List _localPhoneIdBytes;
+  late String localPhoneId;
+  String localName = "User"; // Default, loaded from prefs
 
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   List<DiscoveredUser> get discoveredUsers => _discoveredUsers.values.toList()..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
 
+  Future<void>? _initFuture;
+
   ChatProvider() {
-    localPhoneId = "PHONE_${const Uuid().v4().substring(0, 6).toUpperCase()}";
+    _initFuture = _initIdentity();
+  }
+
+  Future<void> _waitForInit() async {
+    if (_initFuture != null) await _initFuture;
+  }
+
+  Future<void> _initIdentity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedId = prefs.getString('local_phone_id');
+    if (savedId != null) {
+      localPhoneId = savedId;
+      _localPhoneIdBytes = Uint8List.fromList(Uuid.parse(savedId));
+    } else {
+      _localPhoneIdBytes = _uuid.v4obj().toBytes();
+      localPhoneId = Uuid.unparse(_localPhoneIdBytes);
+      await prefs.setString('local_phone_id', localPhoneId);
+    }
+    localName = prefs.getString('local_name') ?? "User ${localPhoneId.substring(0, 4)}";
+    
+    debugPrint('📱 My Phone ID: $localPhoneId');
     _listenToIncomingData();
     _startHelloBroadcast();
   }
   
   void _startHelloBroadcast() {
-     _connectionSubscription = _bluetoothService.connectionProgress.listen((progress) {
-       if (progress == 1.0) {
-         // Connected!
-         Future.delayed(const Duration(seconds: 2), _broadcastHello);
-       }
-     });
-
-     _helloTimer = Timer.periodic(const Duration(seconds: 20), (_) {
-         if (_bluetoothService.connectedDevice != null) {
-           _broadcastHello();
-         }
-     });
+    _helloTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      _broadcastHello();
+    });
   }
   
   Future<void> _broadcastHello() async {
-    final helloMsg = ChatMessage(
-      id: "hello_${DateTime.now().millisecondsSinceEpoch}",
-      timestamp: DateTime.now(),
-      type: MessageType.hello,
-      origin: localPhoneId,
-      via: localPhoneId,
-      receiverId: "BROADCAST",
-      senderName: localName,
-      text: "",
-      isOutgoing: true,
-      status: MessageStatus.sent,
+    await _waitForInit();
+    if (_bluetoothService.connectedDevice == null) return;
+    
+    final msgIdBytes = _uuid.v4obj().toBytes();
+    final frame = Frame(
+      type: FrameType.hello,
+      origin: _localPhoneIdBytes,
+      via: _localPhoneIdBytes,
+      receiver: Frame.getBroadcastUuid(),
+      messageId: msgIdBytes,
+      payload: Frame.utf8ToBytes(localName),
     );
-    final jsonPayload = '${helloMsg.toJson()}\n';
-    await _bluetoothService.sendMessage(jsonPayload); // Fallback to send string
+    
+    await _bluetoothService.sendFrame(frame);
   }
 
-  String _jsonBuffer = "";
+  void onDeviceConnected() {
+    Future.delayed(const Duration(seconds: 2), () {
+      _broadcastHello();
+    });
+  }
+
+  Future<void> setLocalName(String name) async {
+    await _waitForInit();
+    localName = name;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('local_name', name);
+    notifyListeners();
+    _broadcastHello();
+  }
+
+  void _updateUserStats(String originStr, String viaStr, int rssi, {String? name}) {
+    final double distance = rssi == 0 ? 0.0 : math.pow(10, (14 - rssi) / 25).toDouble();
+    
+    if (_discoveredUsers.containsKey(originStr)) {
+      _discoveredUsers[originStr] = _discoveredUsers[originStr]!.copyWith(
+        name: name,
+        device: viaStr,
+        lastSeen: DateTime.now(),
+        rssi: rssi,
+        distance: distance,
+      );
+    } else {
+      _discoveredUsers[originStr] = DiscoveredUser(
+        phoneId: originStr,
+        name: name ?? "User ${originStr.substring(0, 4)}",
+        device: viaStr,
+        lastSeen: DateTime.now(),
+        rssi: rssi,
+        distance: distance,
+      );
+    }
+    notifyListeners();
+  }
 
   void _listenToIncomingData() {
-    _incomingSubscription = _bluetoothService.incomingData.listen((bytes) {
-      if (bytes.isEmpty) return;
-      
-      if (bytes[0] == BinaryProtocol.MAGIC_BYTE) {
-        _handleIncomingBinary(bytes);
-      } else {
-        _handleIncomingJsonChunk(bytes);
+    _incomingSubscription = _bluetoothService.incomingFrames.listen((frame) {
+      final originStr = Uuid.unparse(frame.origin);
+      final viaStr = Uuid.unparse(frame.via);
+      final receiverStr = Uuid.unparse(frame.receiver);
+      final msgIdStr = Uuid.unparse(frame.messageId);
+
+      // Ignore our own looped back broadcasts
+      if (originStr == localPhoneId) return;
+
+      switch (frame.type) {
+        case FrameType.hello:
+          final senderName = Frame.bytesToUtf8(frame.payload);
+          _updateUserStats(originStr, viaStr, frame.rssi, name: senderName);
+          break;
+
+        case FrameType.text:
+          _updateUserStats(originStr, viaStr, frame.rssi);
+          final text = Frame.bytesToUtf8(frame.payload);
+          final msg = ChatMessage(
+            id: msgIdStr,
+            timestamp: DateTime.now(),
+            type: MessageType.text,
+            origin: originStr,
+            via: viaStr,
+            receiverId: receiverStr,
+            text: text,
+            isOutgoing: false,
+            status: MessageStatus.delivered,
+          );
+          if (!_messages.any((m) => m.id == msgIdStr)) {
+            _messages.add(msg);
+            notifyListeners();
+            _sendAck(frame.messageId, frame.origin);
+          }
+          break;
+
+        case FrameType.ack:
+          _updateUserStats(originStr, viaStr, frame.rssi);
+          if (frame.payload.length == 16) {
+            final ackFor = Uuid.unparse(frame.payload);
+            final index = _messages.indexWhere((m) => m.id == ackFor);
+            if (index != -1) {
+              _messages[index] = _messages[index].copyWith(status: MessageStatus.delivered);
+              notifyListeners();
+            }
+          }
+          break;
+
+        case FrameType.voice:
+          _updateUserStats(originStr, viaStr, frame.rssi);
+          _handleIncomingVoice(frame, originStr, viaStr, receiverStr, msgIdStr);
+          break;
+          
+        case FrameType.location:
+          _updateUserStats(originStr, viaStr, frame.rssi);
+          final locationMessage = ChatMessage(
+            id: msgIdStr,
+            timestamp: DateTime.now(),
+            type: MessageType.location,
+            origin: originStr,
+            via: viaStr,
+            receiverId: receiverStr,
+            text: Frame.bytesToUtf8(frame.payload),
+            isOutgoing: false,
+            status: MessageStatus.delivered,
+          );
+          if (!_messages.any((m) => m.id == msgIdStr)) {
+            _messages.add(locationMessage);
+            notifyListeners();
+            _sendAck(frame.messageId, frame.origin);
+          }
+          break;
+
+        case FrameType.image:
+          _updateUserStats(originStr, viaStr, frame.rssi);
+          _handleIncomingImage(frame, originStr, viaStr, receiverStr, msgIdStr);
+          break;
+
+        case FrameType.unknown:
+          break;
       }
     });
   }
 
-  void _handleIncomingJsonChunk(Uint8List bytes) {
-    try {
-      _jsonBuffer += utf8.decode(bytes);
-      while (true) {
-        final newlineIdx = _jsonBuffer.indexOf('\n');
-        if (newlineIdx == -1) break;
-        
-        final packet = _jsonBuffer.substring(0, newlineIdx);
-        _jsonBuffer = _jsonBuffer.substring(newlineIdx + 1);
-        
-        if (packet.trim().isNotEmpty) {
-          _parseJsonPacket(packet);
-        }
-      }
-    } catch (e) {
-      debugPrint('Error decoding JSON chunk: $e');
-    }
-  }
+  Future<void> _handleIncomingVoice(Frame frame, String originStr, String viaStr, String receiverStr, String msgIdStr) async {
+    if (frame.payload.length < 20) return;
+    final buffer = ByteData.sublistView(frame.payload);
+    final chunkIdx = buffer.getUint16(0, Endian.little);
+    final totalChunks = buffer.getUint16(2, Endian.little);
+    final voiceIdBytes = frame.payload.sublist(4, 20);
+    final audioData = frame.payload.sublist(20);
+    
+    final voiceIdStr = Uuid.unparse(voiceIdBytes);
 
-  void _parseJsonPacket(String incomingText) {
-    try {
-      final parsedMessage = ChatMessage.fromJson(incomingText, isOutgoing: false);
-      
-      if (parsedMessage.type == MessageType.hello) {
-          final user = DiscoveredUser(
-            phoneId: parsedMessage.origin,
-            name: parsedMessage.senderName ?? "Unknown",
-            device: parsedMessage.via,
-            lastSeen: parsedMessage.timestamp,
-          );
-          _discoveredUsers[parsedMessage.origin] = user;
-          notifyListeners();
-      } else if (parsedMessage.type == MessageType.ack) {
-        final index = _messages.indexWhere((m) => m.id == parsedMessage.id);
-        if (index != -1) {
-          _messages[index] = _messages[index].copyWith(status: MessageStatus.delivered);
-          notifyListeners();
-        }
-      } else if (parsedMessage.type == MessageType.text || parsedMessage.type == MessageType.sos) {
-        if (!_messages.any((m) => m.id == parsedMessage.id)) {
-          _messages.add(parsedMessage);
-          notifyListeners();
-          _sendAck(parsedMessage.id, parsedMessage.origin);
-        }
-      }
-    } catch (e) {
-      debugPrint('Failed to parse incoming message as JSON: $incomingText');
-    }
-  }
-
-  Future<void> _handleIncomingBinary(Uint8List bytes) async {
-    final header = BinaryProtocol.decodeHeader(bytes);
-    if (header == null) return;
-
-    final voiceId = header['voiceId'] as String;
-    final chunkIdx = header['chunkIdx'] as int;
-    final totalChunks = header['totalChunks'] as int;
-    final payload = header['payload'] as Uint8List;
-
-    if (!_voiceBuffers.containsKey(voiceId)) {
-      _voiceBuffers[voiceId] = List.filled(totalChunks, Uint8List(0));
+    if (!_voiceBuffers.containsKey(voiceIdStr)) {
+      _voiceBuffers[voiceIdStr] = List.filled(totalChunks, Uint8List(0));
     }
 
-    final bufferList = _voiceBuffers[voiceId]!;
+    final bufferList = _voiceBuffers[voiceIdStr]!;
     if (chunkIdx < totalChunks) {
-      bufferList[chunkIdx] = payload;
+      bufferList[chunkIdx] = audioData;
     }
 
-    // Check if all chunks are received
     if (!bufferList.any((chunk) => chunk.isEmpty)) {
       final fullAudio = BytesBuilder();
-      for (final chunk in bufferList) {
-        fullAudio.add(chunk);
-      }
+      for (final chunk in bufferList) fullAudio.add(chunk);
       
-      _voiceBuffers.remove(voiceId); // Cleanup
+      _voiceBuffers.remove(voiceIdStr);
       
-      // Save to temporary file
       final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/$voiceId.m4a');
+      final file = File('\${dir.path}/$voiceIdStr.m4a');
       await file.writeAsBytes(fullAudio.toBytes());
 
       final incomingMessage = ChatMessage(
-        id: voiceId,
+        id: voiceIdStr,
         timestamp: DateTime.now(),
         type: MessageType.voice,
-        origin: header['origin'],
-        via: header['via'],
-        receiverId: header['receiver'],
-        text: file.path, // Store the local file path here
+        origin: originStr,
+        via: viaStr,
+        receiverId: receiverStr,
+        text: file.path,
         isOutgoing: false,
         status: MessageStatus.delivered,
       );
 
-      if (!_messages.any((m) => m.id == voiceId)) {
+      if (!_messages.any((m) => m.id == voiceIdStr)) {
         _messages.add(incomingMessage);
         notifyListeners();
-        _sendAck(voiceId, header['origin']);
+        _sendAck(voiceIdBytes, frame.origin); // ACK the parent voice ID
       }
     }
   }
 
-  Future<void> _sendAck(String originalMsgId, String receiverId) async {
-      final ackMsg = ChatMessage(
-          id: originalMsgId,
-          timestamp: DateTime.now(),
-          type: MessageType.ack,
-          origin: localPhoneId,
-          via: localPhoneId,
-          receiverId: receiverId,
-          text: "received",
-          isOutgoing: true,
-          status: MessageStatus.sent,
+  Future<void> _handleIncomingImage(Frame frame, String originStr, String viaStr, String receiverStr, String msgIdStr) async {
+    if (frame.payload.length < 20) return;
+    final buffer = ByteData.sublistView(frame.payload);
+    final chunkIdx = buffer.getUint16(0, Endian.little);
+    final totalChunks = buffer.getUint16(2, Endian.little);
+    final imageIdBytes = frame.payload.sublist(4, 20);
+    final imageData = frame.payload.sublist(20);
+    
+    final imageIdStr = Uuid.unparse(imageIdBytes);
+
+    if (!_imageBuffers.containsKey(imageIdStr)) {
+      _imageBuffers[imageIdStr] = List.filled(totalChunks, Uint8List(0));
+    }
+
+    final bufferList = _imageBuffers[imageIdStr]!;
+    if (chunkIdx < totalChunks) {
+      bufferList[chunkIdx] = imageData;
+    }
+
+    if (!bufferList.any((chunk) => chunk.isEmpty)) {
+      final fullImage = BytesBuilder();
+      for (final chunk in bufferList) fullImage.add(chunk);
+      
+      _imageBuffers.remove(imageIdStr);
+      
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/$imageIdStr.jpg');
+      await file.writeAsBytes(fullImage.toBytes());
+
+      final incomingMessage = ChatMessage(
+        id: imageIdStr,
+        timestamp: DateTime.now(),
+        type: MessageType.image,
+        origin: originStr,
+        via: viaStr,
+        receiverId: receiverStr,
+        text: file.path,
+        isOutgoing: false,
+        status: MessageStatus.delivered,
       );
-      final jsonPayload = '${ackMsg.toJson()}\n';
-      await _bluetoothService.sendMessage(jsonPayload);
+
+      if (!_messages.any((m) => m.id == imageIdStr)) {
+        _messages.add(incomingMessage);
+        notifyListeners();
+        _sendAck(imageIdBytes, frame.origin); // ACK the parent image ID
+      }
+    }
+  }
+
+  Future<void> _sendAck(Uint8List originalMsgIdBytes, Uint8List receiverBytes) async {
+    await _waitForInit();
+    final ackMsgId = _uuid.v4obj().toBytes();
+    final frame = Frame(
+      type: FrameType.ack,
+      origin: _localPhoneIdBytes,
+      via: _localPhoneIdBytes,
+      receiver: receiverBytes,
+      messageId: ackMsgId,
+      payload: originalMsgIdBytes, // The ID we are ACKing
+    );
+    await _bluetoothService.sendFrame(frame);
   }
 
   Future<void> sendMessage(String text, String receiverId, {bool isSos = false}) async {
+    await _waitForInit();
     if (text.trim().isEmpty && !isSos) return;
 
+    final msgIdBytes = _uuid.v4obj().toBytes();
+    final msgIdStr = Uuid.unparse(msgIdBytes);
+    final receiverBytes = Uint8List.fromList(Uuid.parse(receiverId));
+
     final outgoingMessage = ChatMessage(
-      id: "msg_${DateTime.now().millisecondsSinceEpoch}",
+      id: msgIdStr,
       timestamp: DateTime.now(),
       type: isSos ? MessageType.sos : MessageType.text,
       origin: localPhoneId,
@@ -211,28 +334,43 @@ class ChatProvider extends ChangeNotifier {
       receiverId: receiverId,
       text: isSos ? "SOS!" : text.trim(),
       isOutgoing: true,
-      status: MessageStatus.sent,
+      status: MessageStatus.sending, // Initial state
     );
 
     _messages.add(outgoingMessage);
     notifyListeners();
 
-    final jsonPayload = '${outgoingMessage.toJson()}\n';
-    await _bluetoothService.sendMessage(jsonPayload);
+    final frame = Frame(
+      type: FrameType.text,
+      origin: _localPhoneIdBytes,
+      via: _localPhoneIdBytes,
+      receiver: receiverBytes,
+      messageId: msgIdBytes,
+      payload: Frame.utf8ToBytes(isSos ? "SOS!" : text.trim()),
+    );
+    
+    final success = await _bluetoothService.sendFrame(frame);
+    
+    final index = _messages.indexWhere((m) => m.id == msgIdStr);
+    if (index != -1) {
+      _messages[index] = _messages[index].copyWith(
+        status: success ? MessageStatus.sent : MessageStatus.failed
+      );
+      notifyListeners();
+    }
   }
 
   Future<void> sendVoiceBytes(Uint8List audioBytes, String receiverId) async {
-    final voiceId = "voice_${DateTime.now().millisecondsSinceEpoch}";
-    final chunkSize = 180;
-    final totalChunks = (audioBytes.length / chunkSize).ceil();
+    final msgIdBytes = _uuid.v4obj().toBytes();
+    final msgIdStr = Uuid.unparse(msgIdBytes);
+    final receiverBytes = Uint8List.fromList(Uuid.parse(receiverId));
 
-    // Add to UI immediately
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$voiceId.m4a');
+    final file = File('${dir.path}/$msgIdStr.m4a');
     await file.writeAsBytes(audioBytes);
 
     final outgoingMessage = ChatMessage(
-      id: voiceId,
+      id: msgIdStr,
       timestamp: DateTime.now(),
       type: MessageType.voice,
       origin: localPhoneId,
@@ -240,45 +378,177 @@ class ChatProvider extends ChangeNotifier {
       receiverId: receiverId,
       text: file.path,
       isOutgoing: true,
-      status: MessageStatus.sending, // will update to sent later or loop
+      status: MessageStatus.sending,
     );
 
     _messages.add(outgoingMessage);
     notifyListeners();
 
-    // Send chunks
+    // Max frame payload is 1024, but LoRa limits to ~180. 
+    // We leave room for 4 bytes of chunk header inside the payload.
+    const maxChunkAudioSize = 140; 
+    final totalChunks = (audioBytes.length / maxChunkAudioSize).ceil();
+
+    bool allSent = true;
     for (int i = 0; i < totalChunks; i++) {
-      final end = math.min(audioBytes.length, (i + 1) * chunkSize);
-      final chunk = audioBytes.sublist(i * chunkSize, end);
+      final end = math.min(audioBytes.length, (i + 1) * maxChunkAudioSize);
+      final chunkData = audioBytes.sublist(i * maxChunkAudioSize, end);
       
-      final packet = BinaryProtocol.encodeVoiceChunk(
-        ttl: 8,
-        hop: 0,
-        origin: localPhoneId,
-        receiver: receiverId,
-        via: localPhoneId,
-        voiceId: voiceId,
-        chunkIdx: i,
-        totalChunks: totalChunks,
-        payload: chunk,
+      final payload = BytesBuilder();
+      final header = ByteData(4);
+      header.setUint16(0, i, Endian.little);
+      header.setUint16(2, totalChunks, Endian.little);
+      payload.add(header.buffer.asUint8List());
+      payload.add(chunkData);
+
+      // Use a new messageId for each chunk to pass deduplication on the ESP32!
+      // But how does receiver know they belong to the same voice message?
+      // Wait, deduplication is based on MessageId!
+      // If we use a different MessageId, how does the receiver group them?
+      // We should use the same msgId for grouping, BUT add chunkIdx to it, or put msgId in payload?
+      // Actually, since Voice frames are just chunks, we can put the parent VoiceId in the payload!
+      // Let's modify Voice payload to: ChunkIdx(2), TotalChunks(2), ParentVoiceId(16), AudioData
+      // and give each chunk frame a UNIQUE messageId for deduplication.
+      
+      // We'll update the payload format to include ParentVoiceId.
+      final chunkPayload = BytesBuilder();
+      chunkPayload.add(header.buffer.asUint8List());
+      chunkPayload.add(msgIdBytes);
+      chunkPayload.add(chunkData);
+
+      final chunkFrameMsgId = _uuid.v4obj().toBytes(); // Unique ID for ESP32 routing deduplication
+
+      final frame = Frame(
+        type: FrameType.voice,
+        origin: _localPhoneIdBytes,
+        via: _localPhoneIdBytes,
+        receiver: receiverBytes,
+        messageId: chunkFrameMsgId,
+        payload: chunkPayload.toBytes(),
       );
 
-      await _bluetoothService.sendBytes(packet);
-      // Pacing for LoRa throughput (e.g. max ~1-2 packets per second depending on SF)
-      // Since it's MVP, we just add a delay. 
-      await Future.delayed(const Duration(milliseconds: 200)); 
+      final success = await _bluetoothService.sendFrame(frame);
+      if (!success) allSent = false;
+      await Future.delayed(const Duration(milliseconds: 600)); 
     }
     
-    // Update status to sent locally
-    final index = _messages.indexWhere((m) => m.id == voiceId);
+    final index = _messages.indexWhere((m) => m.id == msgIdStr);
     if (index != -1) {
-      _messages[index] = _messages[index].copyWith(status: MessageStatus.sent);
+      _messages[index] = _messages[index].copyWith(
+        status: allSent ? MessageStatus.sent : MessageStatus.failed
+      );
+      notifyListeners();
+    }
+  }
+
+  Future<void> sendLocation(String latLng, String receiverId) async {
+    await _waitForInit();
+    final msgIdBytes = _uuid.v4obj().toBytes();
+    final msgIdStr = Uuid.unparse(msgIdBytes);
+    final receiverBytes = Uint8List.fromList(Uuid.parse(receiverId));
+
+    final outgoingMessage = ChatMessage(
+      id: msgIdStr,
+      timestamp: DateTime.now(),
+      type: MessageType.location,
+      origin: localPhoneId,
+      via: localPhoneId,
+      receiverId: receiverId,
+      text: latLng,
+      isOutgoing: true,
+      status: MessageStatus.sending,
+    );
+
+    _messages.add(outgoingMessage);
+    notifyListeners();
+
+    final frame = Frame(
+      type: FrameType.location,
+      origin: _localPhoneIdBytes,
+      via: _localPhoneIdBytes,
+      receiver: receiverBytes,
+      messageId: msgIdBytes,
+      payload: Frame.utf8ToBytes(latLng),
+    );
+    
+    final success = await _bluetoothService.sendFrame(frame);
+    
+    final index = _messages.indexWhere((m) => m.id == msgIdStr);
+    if (index != -1) {
+      _messages[index] = _messages[index].copyWith(
+        status: success ? MessageStatus.sent : MessageStatus.failed
+      );
+      notifyListeners();
+    }
+  }
+
+  Future<void> sendImageBytes(Uint8List imageBytes, String receiverId) async {
+    final msgIdBytes = _uuid.v4obj().toBytes();
+    final msgIdStr = Uuid.unparse(msgIdBytes);
+    final receiverBytes = Uint8List.fromList(Uuid.parse(receiverId));
+
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/$msgIdStr.jpg');
+    await file.writeAsBytes(imageBytes);
+
+    final outgoingMessage = ChatMessage(
+      id: msgIdStr,
+      timestamp: DateTime.now(),
+      type: MessageType.image,
+      origin: localPhoneId,
+      via: localPhoneId,
+      receiverId: receiverId,
+      text: file.path,
+      isOutgoing: true,
+      status: MessageStatus.sending,
+    );
+
+    _messages.add(outgoingMessage);
+    notifyListeners();
+
+    const maxChunkImageSize = 140; 
+    final totalChunks = (imageBytes.length / maxChunkImageSize).ceil();
+
+    bool allSent = true;
+    for (int i = 0; i < totalChunks; i++) {
+      final end = math.min(imageBytes.length, (i + 1) * maxChunkImageSize);
+      final chunkData = imageBytes.sublist(i * maxChunkImageSize, end);
+      
+      final payload = BytesBuilder();
+      final header = ByteData(4);
+      header.setUint16(0, i, Endian.little);
+      header.setUint16(2, totalChunks, Endian.little);
+      payload.add(header.buffer.asUint8List());
+      payload.add(msgIdBytes);
+      payload.add(chunkData);
+
+      final chunkFrameMsgId = _uuid.v4obj().toBytes();
+
+      final frame = Frame(
+        type: FrameType.image,
+        origin: _localPhoneIdBytes,
+        via: _localPhoneIdBytes,
+        receiver: receiverBytes,
+        messageId: chunkFrameMsgId,
+        payload: payload.toBytes(),
+      );
+
+      final success = await _bluetoothService.sendFrame(frame);
+      if (!success) allSent = false;
+      await Future.delayed(const Duration(milliseconds: 600)); 
+    }
+    
+    final index = _messages.indexWhere((m) => m.id == msgIdStr);
+    if (index != -1) {
+      _messages[index] = _messages[index].copyWith(
+        status: allSent ? MessageStatus.sent : MessageStatus.failed
+      );
       notifyListeners();
     }
   }
 
   List<ChatMessage> getMessagesForUser(String userId) {
-      return _messages.where((m) => m.receiverId == userId || m.origin == userId || m.receiverId == "BROADCAST").toList();
+      return _messages.where((m) => m.receiverId == userId || m.origin == userId || m.receiverId == Uuid.unparse(Frame.getBroadcastUuid())).toList();
   }
 
   void clearChat() {
@@ -289,7 +559,6 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _incomingSubscription?.cancel();
-    _connectionSubscription?.cancel();
     _helloTimer?.cancel();
     super.dispose();
   }

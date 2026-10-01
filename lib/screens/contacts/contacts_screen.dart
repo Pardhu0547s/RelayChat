@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../providers/bluetooth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../utils/colors.dart';
@@ -22,6 +23,7 @@ class ContactsScreen extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: AppColors.getBackground(context),
         elevation: 0,
+        automaticallyImplyLeading: false,
         title: Text(
           'Nearby Contacts',
           style: TextStyle(
@@ -45,6 +47,31 @@ class ContactsScreen extends StatelessWidget {
             onPressed: () {
               themeProvider.toggleTheme();
             },
+          ),
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert, color: textPrimary),
+            color: cardBg,
+            onSelected: (value) async {
+              if (value == 'forget') {
+                final btProvider = Provider.of<BluetoothProvider>(context, listen: false);
+                await btProvider.forgetDevice();
+                if (context.mounted) {
+                  Navigator.pushReplacementNamed(context, AppConstants.routeBluetoothStatus);
+                }
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem<String>(
+                value: 'forget',
+                child: Row(
+                  children: [
+                    Icon(Icons.bluetooth_disabled, color: AppColors.error, size: 18),
+                    SizedBox(width: 8),
+                    Text('Forget Device & Rescan', style: TextStyle(color: AppColors.error)),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -71,6 +98,31 @@ class ContactsScreen extends StatelessWidget {
                   Text(
                     'Waiting for hello broadcasts...',
                     style: TextStyle(color: subtitleColor, fontSize: 14),
+                  ),
+                  const SizedBox(height: 24),
+                  // Show connection status
+                  Consumer<BluetoothProvider>(
+                    builder: (context, btProvider, _) {
+                      final connected = btProvider.connectedDevice != null;
+                      return Column(
+                        children: [
+                          Icon(
+                            connected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
+                            color: connected ? Colors.green : Colors.red,
+                            size: 24,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            connected ? 'ESP32 Connected' : 'ESP32 Not Connected',
+                            style: TextStyle(
+                              color: connected ? Colors.green : Colors.red,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ],
               ),
@@ -125,21 +177,7 @@ class ContactsScreen extends StatelessWidget {
                                 color: textPrimary,
                               ),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Phone: ${user.phoneId}',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: textSecondary,
-                              ),
-                            ),
-                            Text(
-                              'Via Node: ${user.device}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: subtitleColor,
-                              ),
-                            ),
+                            // IDs hidden for cleaner UI
                           ],
                         ),
                       ),
@@ -156,6 +194,13 @@ class ContactsScreen extends StatelessWidget {
                             timeAgoStr,
                             style: TextStyle(fontSize: 12, color: subtitleColor),
                           ),
+                          if (user.distance > 0) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              '≈ ${user.distance.toStringAsFixed(1)}m',
+                              style: const TextStyle(fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.bold),
+                            ),
+                          ],
                         ],
                       ),
                     ],

@@ -42,6 +42,12 @@ dependencies:
   record: ^7.1.1
   audioplayers: ^6.8.1
   path_provider: ^2.1.6
+  shared_preferences: ^2.5.5
+  uuid: ^4.6.0
+  image_picker: ^1.2.3
+  flutter_image_compress: ^2.5.1
+  geolocator: ^14.1.0
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
@@ -68,6 +74,7 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/logo/
+    - assets/Sounds/
 
 
   # An image asset can refer to one or more resolution-specific "variants", see

@@ -3,12 +3,16 @@ class DiscoveredUser {
   final String name;
   final String device;
   final DateTime lastSeen;
+  final int rssi;
+  final double distance;
 
   DiscoveredUser({
     required this.phoneId,
     required this.name,
     required this.device,
     required this.lastSeen,
+    this.rssi = 0,
+    this.distance = 0.0,
   });
 
   DiscoveredUser copyWith({
@@ -16,12 +20,16 @@ class DiscoveredUser {
     String? name,
     String? device,
     DateTime? lastSeen,
+    int? rssi,
+    double? distance,
   }) {
     return DiscoveredUser(
       phoneId: phoneId ?? this.phoneId,
       name: name ?? this.name,
       device: device ?? this.device,
       lastSeen: lastSeen ?? this.lastSeen,
+      rssi: rssi ?? this.rssi,
+      distance: distance ?? this.distance,
     );
   }
 }

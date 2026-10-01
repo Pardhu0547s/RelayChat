@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/bluetooth_device.dart';
 import '../../providers/bluetooth_provider.dart';
+import '../../providers/chat_provider.dart';
 import '../../utils/colors.dart';
 import '../../utils/constants.dart';
 
@@ -36,6 +37,9 @@ class _ConnectingScreenState extends State<ConnectingScreen> {
     final success = await btProvider.connectDevice(_targetDevice!);
 
     if (mounted && success) {
+      // Notify ChatProvider that BLE is connected
+      Provider.of<ChatProvider>(context, listen: false).onDeviceConnected();
+      
       // Transition to Screen 5 (Connected Device)
       Navigator.pushReplacementNamed(
         context,

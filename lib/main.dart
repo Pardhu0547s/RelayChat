@@ -11,6 +11,7 @@ import 'screens/connection/connected_device_screen.dart';
 import 'screens/connection/connecting_screen.dart';
 import 'screens/scanner/device_scanner_screen.dart';
 import 'screens/contacts/contacts_screen.dart';
+import 'screens/profile/profile_setup_screen.dart';
 import 'screens/splash/splash_screen.dart';
 import 'utils/colors.dart';
 import 'utils/constants.dart';
@@ -71,6 +72,7 @@ class RelayChatApp extends StatelessWidget {
             initialRoute: AppConstants.routeSplash,
             routes: {
               AppConstants.routeSplash: (context) => const SplashScreen(),
+              AppConstants.routeProfileSetup: (context) => const ProfileSetupScreen(),
               AppConstants.routeBluetoothStatus: (context) => const BluetoothStatusScreen(),
               AppConstants.routeScanner: (context) => const DeviceScannerScreen(),
               AppConstants.routeConnecting: (context) => const ConnectingScreen(),

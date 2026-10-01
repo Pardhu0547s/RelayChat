@@ -5,7 +5,8 @@ class AppConstants {
   
   // Navigation Routes
   static const String routeSplash = '/';
-  static const String routeBluetoothStatus = '/bluetooth_status';
+  static const String routeProfileSetup = '/profile-setup';
+  static const String routeBluetoothStatus = '/bluetooth-status';
   static const String routeScanner = '/scanner';
   static const String routeConnecting = '/connecting';
   static const String routeConnectedDevice = '/connected_device';

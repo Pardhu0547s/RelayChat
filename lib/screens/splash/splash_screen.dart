@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/bluetooth_provider.dart';
+import '../../providers/chat_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/colors.dart';
 import '../../utils/constants.dart';
 
@@ -15,7 +17,7 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
   late AnimationController _animController;
   late Animation<double> _fadeAnimation;
-  Timer? _timer;
+  String _statusText = 'Loading...';
 
   @override
   void initState() {
@@ -31,27 +33,75 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
     _animController.forward();
 
-    // Auto navigate after 2.5 seconds
-    _timer = Timer(const Duration(milliseconds: 2500), _navigateToNextScreen);
+    // Start connection flow after animation begins
+    Future.delayed(const Duration(milliseconds: 1500), _startConnectionFlow);
   }
 
-  void _navigateToNextScreen() async {
+  void _startConnectionFlow() async {
     if (!mounted) return;
+
+    // Check if profile exists
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey('local_name')) {
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, AppConstants.routeProfileSetup);
+      return;
+    }
+
     final btProvider = Provider.of<BluetoothProvider>(context, listen: false);
     await btProvider.checkStatusAndPermissions();
 
     if (!mounted) return;
-    // If bluetooth is enabled and permissions granted, jump directly to Scanner or Status
-    if (btProvider.isBluetoothEnabled && btProvider.isPermissionGranted) {
-      Navigator.pushReplacementNamed(context, AppConstants.routeBluetoothStatus);
-    } else {
-      Navigator.pushReplacementNamed(context, AppConstants.routeBluetoothStatus);
+
+    // Check permissions first
+    if (!btProvider.isPermissionGranted) {
+      setState(() => _statusText = 'Requesting permissions...');
+      await btProvider.requestPermissions();
+      if (!mounted) return;
     }
+
+    // Check bluetooth
+    if (!btProvider.isBluetoothEnabled) {
+      setState(() => _statusText = 'Enabling Bluetooth...');
+      await btProvider.turnOnBluetooth();
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return;
+    }
+
+    // Try auto-connect if we have a saved device
+    if (btProvider.hasSavedDevice) {
+      setState(() => _statusText = 'Connecting to ESP32...');
+      
+      final success = await btProvider.autoConnect();
+      
+      if (!mounted) return;
+      
+      if (success) {
+        setState(() => _statusText = 'Connected!');
+        
+        // Notify ChatProvider
+        Provider.of<ChatProvider>(context, listen: false).onDeviceConnected();
+        
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (!mounted) return;
+        
+        // Go straight to contacts
+        Navigator.pushReplacementNamed(context, AppConstants.routeContacts);
+        return;
+      } else {
+        // Auto-connect failed, fall through to scanner
+        setState(() => _statusText = 'Auto-connect failed. Scanning...');
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    }
+
+    if (!mounted) return;
+    // No saved device or auto-connect failed → go to bluetooth status / scanner
+    Navigator.pushReplacementNamed(context, AppConstants.routeBluetoothStatus);
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
     _animController.dispose();
     super.dispose();
   }
@@ -130,9 +180,9 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                 ),
               ),
               const SizedBox(height: 16),
-              const Text(
-                'Loading...',
-                style: TextStyle(
+              Text(
+                _statusText,
+                style: const TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 14,
                 ),

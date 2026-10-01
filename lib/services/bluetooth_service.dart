@@ -3,17 +3,20 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/bluetooth_device.dart';
+import '../utils/protocol.dart';
 
-/// BluetoothService encapsulates real BLE operations.
-/// UI never talks directly to Bluetooth — it goes through this service layer.
 class BluetoothService {
   static final BluetoothService _instance = BluetoothService._internal();
   factory BluetoothService() => _instance;
   BluetoothService._internal();
 
-  final StreamController<Uint8List> _incomingDataController = StreamController<Uint8List>.broadcast();
-  Stream<Uint8List> get incomingData => _incomingDataController.stream;
+  static const String _savedDeviceKey = 'last_esp32_mac';
+
+  // Stream for parsed frames
+  final StreamController<Frame> _incomingFrameController = StreamController<Frame>.broadcast();
+  Stream<Frame> get incomingFrames => _incomingFrameController.stream;
 
   final StreamController<double> _connectionProgressController = StreamController<double>.broadcast();
   Stream<double> get connectionProgress => _connectionProgressController.stream;
@@ -27,74 +30,132 @@ class BluetoothService {
   fbp.BluetoothCharacteristic? _txCharacteristic;
   fbp.BluetoothCharacteristic? _rxCharacteristic;
 
+  // Frame reassembly buffer
+  final BytesBuilder _rxBuffer = BytesBuilder();
+
+  // ──────────────────────────────────────────────────────────
+  //  Saved Device (Auto-Reconnect)
+  // ──────────────────────────────────────────────────────────
+
+  Future<void> saveLastDevice(String macAddress) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_savedDeviceKey, macAddress);
+  }
+
+  Future<String?> getLastDeviceMac() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_savedDeviceKey);
+  }
+
+  Future<void> clearSavedDevice() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_savedDeviceKey);
+  }
+
+  Future<bool> autoConnect() async {
+    final mac = await getLastDeviceMac();
+    if (mac == null || mac.isEmpty) return false;
+
+    _connectionProgressController.add(0.1);
+    try {
+      final nativeDevice = fbp.BluetoothDevice.fromId(mac);
+      _connectionProgressController.add(0.2);
+      
+      await nativeDevice.connect(license: fbp.License.nonprofit, timeout: const Duration(seconds: 10));
+
+      if (Platform.isAndroid) {
+        try {
+          await nativeDevice.requestMtu(512);
+        } catch (_) {}
+      }
+
+      nativeDevice.connectionState.listen((state) {
+        if (state == fbp.BluetoothConnectionState.disconnected) {
+          if (_connectedDevice != null) {
+            _connectedDevice = null;
+            _txCharacteristic = null;
+            _rxCharacteristic = null;
+            _rxBuffer.clear();
+            _deviceDisconnectedController.add(true);
+          }
+        }
+      });
+
+      _connectionProgressController.add(0.5);
+      final services = await nativeDevice.discoverServices();
+      _connectionProgressController.add(0.7);
+
+      for (var service in services) {
+        if (service.uuid.toString().toUpperCase().contains('6E400001')) {
+          for (var char in service.characteristics) {
+            final charUuid = char.uuid.toString().toUpperCase();
+            if (charUuid.contains('6E400002')) _txCharacteristic = char;
+            if (charUuid.contains('6E400003')) _rxCharacteristic = char;
+          }
+        }
+      }
+
+      _connectionProgressController.add(0.9);
+
+      if (_rxCharacteristic != null) {
+        await _rxCharacteristic!.setNotifyValue(true);
+        _rxCharacteristic!.onValueReceived.listen(_handleIncomingBleBytes);
+      }
+
+      _connectionProgressController.add(1.0);
+
+      _connectedDevice = RelayDevice(
+        id: mac,
+        name: '📡 RelayChat ESP32',
+        rssi: -50,
+        isAvailable: true,
+        nativeDevice: nativeDevice,
+      );
+
+      return true;
+    } catch (e) {
+      _connectionProgressController.add(0.0);
+      return false;
+    }
+  }
+
   // ──────────────────────────────────────────────────────────
   //  Permissions & Bluetooth Status
   // ──────────────────────────────────────────────────────────
 
   Future<bool> checkPermissions() async {
-    if (kIsWeb || Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
-      return true;
-    }
-
+    if (kIsWeb || Platform.isLinux || Platform.isWindows || Platform.isMacOS) return true;
     if (Platform.isAndroid) {
-      final bluetoothScan = await Permission.bluetoothScan.status;
-      final bluetoothConnect = await Permission.bluetoothConnect.status;
-      final location = await Permission.locationWhenInUse.status;
-
-      // Android 12+ uses bluetoothScan + bluetoothConnect
-      if (bluetoothScan.isGranted && bluetoothConnect.isGranted) {
-        return true;
-      }
-      // Android 11 and below uses location
-      if (location.isGranted) {
-        return true;
-      }
+      final scan = await Permission.bluetoothScan.status;
+      final connect = await Permission.bluetoothConnect.status;
+      final loc = await Permission.locationWhenInUse.status;
+      if (scan.isGranted && connect.isGranted) return true;
+      if (loc.isGranted) return true;
       return false;
     }
-
-    if (Platform.isIOS) {
-      final status = await Permission.bluetooth.status;
-      return status.isGranted;
-    }
-
+    if (Platform.isIOS) return await Permission.bluetooth.status.isGranted;
     return true;
   }
 
   Future<bool> requestPermissions() async {
-    if (kIsWeb || Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
-      return true;
-    }
-
+    if (kIsWeb || Platform.isLinux || Platform.isWindows || Platform.isMacOS) return true;
     if (Platform.isAndroid) {
-      // Request all BLE-related permissions — this triggers the OS popup dialogs
-      final Map<Permission, PermissionStatus> statuses = await [
+      final statuses = await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.bluetoothAdvertise,
         Permission.locationWhenInUse,
       ].request();
-
-      // Check if we got enough permissions
       final scanOk = statuses[Permission.bluetoothScan]?.isGranted ?? false;
       final connectOk = statuses[Permission.bluetoothConnect]?.isGranted ?? false;
-      final locationOk = statuses[Permission.locationWhenInUse]?.isGranted ?? false;
-
-      // Android 12+: need scan + connect. Android 11-: need location.
-      if ((scanOk && connectOk) || locationOk) {
-        return true;
-      }
-
-      // If permanently denied, guide user to app settings
-      final anyPermanentlyDenied = statuses.values.any((s) => s.isPermanentlyDenied);
-      if (anyPermanentlyDenied) {
+      final locOk = statuses[Permission.locationWhenInUse]?.isGranted ?? false;
+      if ((scanOk && connectOk) || locOk) return true;
+      if (statuses.values.any((s) => s.isPermanentlyDenied)) {
         await openAppSettings();
-        // Re-check after returning from settings
         return await checkPermissions();
       }
-
       return false;
     }
-
     if (Platform.isIOS) {
       final status = await Permission.bluetooth.request();
       if (status.isPermanentlyDenied) {
@@ -103,14 +164,11 @@ class BluetoothService {
       }
       return status.isGranted;
     }
-
     return true;
   }
 
   Future<bool> isBluetoothEnabled() async {
-    if (kIsWeb || Platform.isLinux) {
-      return true;
-    }
+    if (kIsWeb || Platform.isLinux) return true;
     try {
       final state = await fbp.FlutterBluePlus.adapterState.first;
       return state == fbp.BluetoothAdapterState.on;
@@ -123,175 +181,105 @@ class BluetoothService {
     if (!kIsWeb && Platform.isAndroid) {
       try {
         await fbp.FlutterBluePlus.turnOn();
-      } catch (e) {
-        debugPrint('Could not turn on Bluetooth: $e');
-      }
+      } catch (_) {}
     }
   }
 
   // ──────────────────────────────────────────────────────────
-  //  Scan Devices — REAL BLE ONLY, no dummy devices
+  //  Scan Devices
   // ──────────────────────────────────────────────────────────
 
   Future<List<RelayDevice>> scanDevices() async {
     final Map<String, RelayDevice> deviceMap = {};
-
-    if (kIsWeb || Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
-      return [];
-    }
+    if (kIsWeb || Platform.isLinux || Platform.isWindows || Platform.isMacOS) return [];
 
     try {
-      // Stop any previous scan
-      if (fbp.FlutterBluePlus.isScanningNow) {
-        await fbp.FlutterBluePlus.stopScan();
-      }
+      if (fbp.FlutterBluePlus.isScanningNow) await fbp.FlutterBluePlus.stopScan();
 
-      // Listen to scan results stream and collect devices in real-time
       StreamSubscription? scanSub;
-
       scanSub = fbp.FlutterBluePlus.onScanResults.listen((results) {
         for (var result in results) {
           final id = result.device.remoteId.str;
-
-          // Check if the device advertises our specific service UUID
-          final serviceUuids = result.advertisementData.serviceUuids
-              .map((g) => g.toString().toUpperCase())
-              .toList();
+          final serviceUuids = result.advertisementData.serviceUuids.map((g) => g.toString().toUpperCase()).toList();
           
-          final bool isRelayChatDevice = serviceUuids.contains('6E400001-B5A3-F393-E0A9-E50E24DCCA9E');
+          if (!serviceUuids.contains('6E400001-B5A3-F393-E0A9-E50E24DCCA9E')) continue;
 
-          if (!isRelayChatDevice) continue;
-
-          // Force display name for confirmed RelayChat devices
-          final deviceName = '📡 RelayChat ESP32';
-
-          // Update or add device (keeps strongest RSSI reading)
           if (!deviceMap.containsKey(id) || result.rssi > (deviceMap[id]?.rssi ?? -999)) {
             deviceMap[id] = RelayDevice(
               id: id,
-              name: deviceName,
+              name: '📡 RelayChat ESP32',
               rssi: result.rssi,
-              isAvailable: true,
-              batteryLevel: 'N/A',
-              firmwareVersion: '1.0',
               nativeDevice: result.device,
             );
           }
         }
-      }, onError: (e) {
-        debugPrint('Scan stream error: $e');
       });
 
-      // Start scanning — don't await, it returns immediately
       await fbp.FlutterBluePlus.startScan(
         withServices: [fbp.Guid('6E400001-B5A3-F393-E0A9-E50E24DCCA9E')],
         timeout: const Duration(seconds: 6),
-        androidUsesFineLocation: true,
       );
-
-      // Wait for scan to finish (timeout fires after 6 seconds)
       await fbp.FlutterBluePlus.isScanning.where((val) => val == false).first;
-
-      // Clean up stream subscription
       await scanSub.cancel();
-    } catch (e) {
-      debugPrint('BLE Scan error: $e');
-    }
+    } catch (_) {}
 
-    // Sort by signal strength (strongest first)
     final devices = deviceMap.values.toList();
     devices.sort((a, b) => b.rssi.compareTo(a.rssi));
     return devices;
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  Connect to ESP32 via real BLE
-  // ──────────────────────────────────────────────────────────
-
   Future<bool> connectToDevice(RelayDevice device) async {
     _connectionProgressController.add(0.1);
-
     try {
       final nativeDevice = device.nativeDevice as fbp.BluetoothDevice?;
-      if (nativeDevice == null) {
-        // Fallback: simulated progress for non-native devices
-        for (int i = 2; i <= 10; i++) {
-          await Future.delayed(const Duration(milliseconds: 180));
-          _connectionProgressController.add(i / 10.0);
-        }
-        _connectedDevice = device;
-        return true;
-      }
+      if (nativeDevice == null) return false;
 
       _connectionProgressController.add(0.2);
-
-      // Connect to physical BLE device
-      await nativeDevice.connect(
-        license: fbp.License.nonprofit,
-        timeout: const Duration(seconds: 10),
-      );
+      await nativeDevice.connect(license: fbp.License.nonprofit, timeout: const Duration(seconds: 10));
       
       if (Platform.isAndroid) {
         try {
           await nativeDevice.requestMtu(512);
-        } catch (e) {
-          debugPrint('MTU Request failed: $e');
-        }
+        } catch (_) {}
       }
       
-      // Listen for unexpected disconnections
       nativeDevice.connectionState.listen((state) {
         if (state == fbp.BluetoothConnectionState.disconnected) {
           if (_connectedDevice != null) {
              _connectedDevice = null;
+             _rxBuffer.clear();
              _deviceDisconnectedController.add(true);
           }
         }
       });
       
       _connectionProgressController.add(0.5);
-
-      // Discover services
       final services = await nativeDevice.discoverServices();
       _connectionProgressController.add(0.7);
 
-      // Find the UART service and characteristics
       for (var service in services) {
         if (service.uuid.toString().toUpperCase().contains('6E400001')) {
           for (var char in service.characteristics) {
             final charUuid = char.uuid.toString().toUpperCase();
-            if (charUuid.contains('6E400002')) {
-              _txCharacteristic = char; // Phone writes to this
-            }
-            if (charUuid.contains('6E400003')) {
-              _rxCharacteristic = char; // Phone reads from this
-            }
+            if (charUuid.contains('6E400002')) _txCharacteristic = char;
+            if (charUuid.contains('6E400003')) _rxCharacteristic = char;
           }
         }
       }
 
       _connectionProgressController.add(0.9);
 
-      // Enable notifications on RX characteristic to receive ESP32 replies
       if (_rxCharacteristic != null) {
         await _rxCharacteristic!.setNotifyValue(true);
-        _rxCharacteristic!.onValueReceived.listen((value) {
-          if (value.isNotEmpty) {
-            _incomingDataController.add(Uint8List.fromList(value));
-          }
-        });
+        _rxCharacteristic!.onValueReceived.listen(_handleIncomingBleBytes);
       }
 
       _connectionProgressController.add(1.0);
-
-      // Update device with real RSSI
-      _connectedDevice = device.copyWith(
-        rssi: await nativeDevice.readRssi().catchError((_) => device.rssi),
-      );
+      _connectedDevice = device.copyWith(rssi: await nativeDevice.readRssi().catchError((_) => device.rssi));
+      await saveLastDevice(device.id);
 
       return true;
     } catch (e) {
-      debugPrint('BLE Connect error: $e');
       _connectionProgressController.add(0.0);
       return false;
     }
@@ -300,64 +288,95 @@ class BluetoothService {
   Future<void> disconnect() async {
     try {
       final nativeDevice = _connectedDevice?.nativeDevice as fbp.BluetoothDevice?;
-      if (nativeDevice != null) {
-        await nativeDevice.disconnect();
-      }
-    } catch (e) {
-      debugPrint('Disconnect error: $e');
-    }
+      if (nativeDevice != null) await nativeDevice.disconnect();
+    } catch (_) {}
     _txCharacteristic = null;
     _rxCharacteristic = null;
     _connectedDevice = null;
+    _rxBuffer.clear();
   }
 
   // ──────────────────────────────────────────────────────────
-  //  Send & Receive Text via real BLE UART
+  //  Frame Framing and Transmission
   // ──────────────────────────────────────────────────────────
 
-  Future<bool> sendMessage(String text) async {
-    if (_connectedDevice == null) return false;
+  void _handleIncomingBleBytes(List<int> value) {
+    if (value.isEmpty) return;
+    _rxBuffer.add(value);
 
-    try {
-      if (_txCharacteristic != null) {
-        // Send text over real BLE UART
-        await _txCharacteristic!.write(
-          text.codeUnits,
-          withoutResponse: _txCharacteristic!.properties.writeWithoutResponse,
-        );
-        return true;
-      } else {
-        debugPrint('TX Characteristic not found — cannot send message');
-        return false;
+    while (_rxBuffer.length >= Frame.HEADER_SIZE) {
+      final bytes = _rxBuffer.toBytes();
+      
+      // Resync to magic byte
+      int magicIdx = bytes.indexOf(Frame.MAGIC_BYTE);
+      if (magicIdx == -1) {
+        _rxBuffer.clear(); // Garbage, drop everything
+        return;
       }
-    } catch (e) {
-      debugPrint('BLE Send error: $e');
-      return false;
+      if (magicIdx > 0) {
+        // Discard data before magic byte
+        _rxBuffer.clear();
+        _rxBuffer.add(bytes.sublist(magicIdx));
+        continue;
+      }
+
+      // Check version
+      if (bytes[1] != Frame.VERSION) {
+        // Bad version, consume magic byte and retry resync
+        _rxBuffer.clear();
+        _rxBuffer.add(bytes.sublist(1));
+        continue;
+      }
+
+      final bufferData = ByteData.sublistView(bytes);
+      final payloadLength = bufferData.getUint16(69, Endian.little);
+      final totalFrameLength = Frame.HEADER_SIZE + payloadLength;
+
+      // Sanity check length
+      if (payloadLength > Frame.MAX_PAYLOAD_SIZE) {
+         _rxBuffer.clear();
+         _rxBuffer.add(bytes.sublist(1));
+         continue;
+      }
+
+      if (_rxBuffer.length < totalFrameLength) {
+        // Wait for more chunks
+        return;
+      }
+
+      // We have a full frame!
+      final frameBytes = bytes.sublist(0, totalFrameLength);
+      final frame = Frame.decode(frameBytes);
+      if (frame != null) {
+        _incomingFrameController.add(frame);
+      }
+
+      // Remove processed frame from buffer
+      _rxBuffer.clear();
+      _rxBuffer.add(bytes.sublist(totalFrameLength));
     }
   }
 
-  Future<bool> sendBytes(Uint8List bytes) async {
-    if (_connectedDevice == null) return false;
+  Future<bool> sendFrame(Frame frame) async {
+    if (_connectedDevice == null || _txCharacteristic == null) return false;
 
     try {
-      if (_txCharacteristic != null) {
-        await _txCharacteristic!.write(
-          bytes,
-          withoutResponse: _txCharacteristic!.properties.writeWithoutResponse,
-        );
-        return true;
-      } else {
-        debugPrint('TX Characteristic not found — cannot send bytes');
-        return false;
-      }
+      final bytes = frame.encode();
+      
+      await _txCharacteristic!.write(
+        bytes,
+        withoutResponse: _txCharacteristic!.properties.writeWithoutResponse,
+      );
+      
+      return true;
     } catch (e) {
-      debugPrint('BLE Send bytes error: $e');
+      debugPrint('SendFrame error: $e');
       return false;
     }
   }
 
   void dispose() {
-    _incomingDataController.close();
+    _incomingFrameController.close();
     _connectionProgressController.close();
     _deviceDisconnectedController.close();
   }

@@ -13,6 +13,7 @@ class BluetoothProvider extends ChangeNotifier {
   double _connectionProgress = 0.0;
   List<RelayDevice> _discoveredDevices = [];
   RelayDevice? _connectedDevice;
+  bool _hasSavedDevice = false;
 
   StreamSubscription<double>? _progressSubscription;
 
@@ -23,6 +24,7 @@ class BluetoothProvider extends ChangeNotifier {
   double get connectionProgress => _connectionProgress;
   List<RelayDevice> get discoveredDevices => _discoveredDevices;
   RelayDevice? get connectedDevice => _connectedDevice;
+  bool get hasSavedDevice => _hasSavedDevice;
   Stream<bool> get deviceDisconnected => _service.deviceDisconnected;
 
   BluetoothProvider() {
@@ -35,6 +37,11 @@ class BluetoothProvider extends ChangeNotifier {
       _connectionProgress = progress;
       notifyListeners();
     });
+    
+    // Check if we have a saved device
+    final savedMac = await _service.getLastDeviceMac();
+    _hasSavedDevice = savedMac != null && savedMac.isNotEmpty;
+    notifyListeners();
   }
 
   Future<void> checkStatusAndPermissions() async {
@@ -82,8 +89,26 @@ class BluetoothProvider extends ChangeNotifier {
     
     if (success) {
       _connectedDevice = _service.connectedDevice;
+      _hasSavedDevice = true;
     }
     
+    notifyListeners();
+    return success;
+  }
+
+  /// Auto-connect to the last saved ESP32
+  Future<bool> autoConnect() async {
+    _isConnecting = true;
+    _connectionProgress = 0.0;
+    notifyListeners();
+
+    final success = await _service.autoConnect();
+    _isConnecting = false;
+
+    if (success) {
+      _connectedDevice = _service.connectedDevice;
+    }
+
     notifyListeners();
     return success;
   }
@@ -91,6 +116,14 @@ class BluetoothProvider extends ChangeNotifier {
   Future<void> disconnectDevice() async {
     await _service.disconnect();
     _connectedDevice = null;
+    notifyListeners();
+  }
+
+  /// Forget the saved device (forces scan on next launch)
+  Future<void> forgetDevice() async {
+    await _service.clearSavedDevice();
+    await disconnectDevice();
+    _hasSavedDevice = false;
     notifyListeners();
   }
 
