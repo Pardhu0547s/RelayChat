@@ -67,6 +67,25 @@ class _MessageBubbleState extends State<MessageBubble> {
     }
   }
 
+  Future<void> _openLocation(String latLng) async {
+    // 1) geo: opens any installed map app (works with offline maps).
+    // 2) Fallback to Google Maps in a browser (needs internet).
+    final coords = latLng.trim();
+    try {
+      final geo = Uri.parse('geo:$coords?q=$coords');
+      if (await launchUrl(geo, mode: LaunchMode.externalApplication)) return;
+    } catch (_) {}
+    try {
+      final web = Uri.parse(
+          'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(coords)}');
+      if (await launchUrl(web, mode: LaunchMode.externalApplication)) return;
+    } catch (_) {}
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('No map app available. Coordinates: $coords')),
+    );
+  }
+
   String _formatDuration(Duration d) {
     String twoDigits(int n) => n.toString().padLeft(2, "0");
     String twoDigitMinutes = twoDigits(d.inMinutes.remainder(60));
@@ -158,23 +177,31 @@ class _MessageBubbleState extends State<MessageBubble> {
               )
             else if (isLocation)
               GestureDetector(
-                onTap: () async {
-                  final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=${message.text}');
-                  if (await canLaunchUrl(url)) {
-                    await launchUrl(url);
-                  }
-                },
+                onTap: () => _openLocation(message.text),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Icon(Icons.location_on, color: Colors.redAccent),
                     const SizedBox(width: 8),
-                    Text(
-                      'Location Shared',
-                      style: TextStyle(
-                        color: textPrimary,
-                        fontSize: 16,
-                        decoration: TextDecoration.underline,
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Location Shared',
+                            style: TextStyle(
+                              color: textPrimary,
+                              fontSize: 16,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                          // Raw coordinates stay readable even with no map app / no internet.
+                          SelectableText(
+                            message.text,
+                            style: TextStyle(color: subtitleColor, fontSize: 12),
+                          ),
+                        ],
                       ),
                     ),
                   ],

@@ -5,6 +5,6 @@ void main() {
   testWidgets('RelayChatApp splash smoke test', (WidgetTester tester) async {
     await tester.pumpWidget(const RelayChatApp());
     expect(find.text('RelayChat'), findsOneWidget);
-    await tester.pumpAndSettle(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 3));
   });
 }

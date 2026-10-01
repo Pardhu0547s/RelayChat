@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 enum MessageStatus { sending, sent, delivered, failed }
-enum MessageType { text, ack, status, ping, voice, file, image, location, mesh, system, sos, hello, unknown }
+enum MessageType { text, ack, status, ping, voice, file, image, location, nack, mesh, system, sos, hello, unknown }
 
 class ChatMessage {
   final int version;

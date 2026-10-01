@@ -157,12 +157,16 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Consumer<ChatProvider>(
         builder: (context, chatProvider, child) {
           _scrollToBottom();
-          final String targetId = _targetUser?.phoneId ?? '';
+          // Broadcast Channel has no target user: use the BROADCAST sentinel (never null / '').
+          final String targetId = _targetUser?.phoneId ?? 'BROADCAST';
           final messages = chatProvider.getMessagesForUser(targetId);
-          final currentUser = chatProvider.discoveredUsers.firstWhere(
-            (u) => u.phoneId == targetId,
-            orElse: () => _targetUser!,
-          );
+          final DiscoveredUser? currentUser = _targetUser == null
+              ? null
+              : chatProvider.discoveredUsers.firstWhere(
+                  (u) => u.phoneId == targetId,
+                  orElse: () => _targetUser!,
+                );
+          final double distance = currentUser?.distance ?? 0.0;
 
           return Column(
             children: [
@@ -174,7 +178,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: Column(
                   children: [
                     Text(
-                      currentUser.name,
+                      currentUser?.name ?? targetName,
                       style: TextStyle(
                         color: subtitleColor,
                         fontSize: 14,
@@ -182,11 +186,11 @@ class _ChatScreenState extends State<ChatScreen> {
                         letterSpacing: 1,
                       ),
                     ),
-                    if (currentUser.distance > 0)
+                    if (distance > 0)
                       Padding(
                         padding: const EdgeInsets.only(top: 4.0),
                         child: Text(
-                          '≈ ${currentUser.distance.toStringAsFixed(1)}m away',
+                          '≈ ${distance.toStringAsFixed(1)}m away',
                           style: TextStyle(
                             color: AppColors.primary,
                             fontSize: 12,

@@ -11,13 +11,58 @@ import '../models/user.dart';
 import '../services/bluetooth_service.dart';
 import '../utils/protocol.dart';
 
+/// Reassembly state for an image that is currently arriving over LoRa.
+class _IncomingImage {
+  final Uint8List idBytes;
+  final Uint8List senderBytes; // who we NACK / ACK
+  final String originStr;
+  final String viaStr;
+  final String receiverStr;
+  final List<Uint8List?> chunks;
+  int nackCount = 0;
+  Timer? timer;
+
+  _IncomingImage({
+    required this.idBytes,
+    required this.senderBytes,
+    required this.originStr,
+    required this.viaStr,
+    required this.receiverStr,
+    required int total,
+  }) : chunks = List<Uint8List?>.filled(total, null);
+
+  int get total => chunks.length;
+  int get receivedCount => chunks.where((c) => c != null).length;
+  bool get isComplete => receivedCount == total;
+}
+
+/// Chunk payloads we keep after sending so we can answer NACKs.
+class _OutgoingImage {
+  final List<Uint8List> payloads;
+  final Uint8List receiverBytes;
+  Timer? expiry;
+  bool busy = false; // true while (re)transmitting, to avoid overlapping bursts
+
+  _OutgoingImage({required this.payloads, required this.receiverBytes});
+}
+
 class ChatProvider extends ChangeNotifier {
+  // ---- Image reliability tuning ----
+  static const int _maxChunkData = 140; // image bytes per LoRa packet
+  static const int _maxImageChunks = 128; // sanity bound against corrupt headers
+  static const Duration _nackSilence = Duration(seconds: 8);
+  static const int _maxNackRetries = 3;
+  static const Duration _outgoingTtl = Duration(minutes: 2);
+  static const Duration _chunkPacing = Duration(milliseconds: 600);
+
   final BluetoothService _bluetoothService = BluetoothService();
   final List<ChatMessage> _messages = [];
   final Map<String, DiscoveredUser> _discoveredUsers = {};
   
   final Map<String, List<Uint8List>> _voiceBuffers = {};
-  final Map<String, List<Uint8List>> _imageBuffers = {};
+  final Map<String, _IncomingImage> _incomingImages = {};
+  final Map<String, _OutgoingImage> _outgoingImages = {};
+  final Set<String> _completedImages = {};
   
   StreamSubscription<Frame>? _incomingSubscription;
   Timer? _helloTimer;
@@ -26,6 +71,18 @@ class ChatProvider extends ChangeNotifier {
   late Uint8List _localPhoneIdBytes;
   late String localPhoneId;
   String localName = "User"; // Default, loaded from prefs
+
+  /// Empty / 'BROADCAST' (the Broadcast Channel has no target user) -> all-zero UUID.
+  String _normalizeReceiver(String id) =>
+      (id.isEmpty || id == 'BROADCAST') ? Uuid.unparse(Frame.getBroadcastUuid()) : id;
+
+  Uint8List _receiverBytes(String id) {
+    try {
+      return Uint8List.fromList(Uuid.parse(_normalizeReceiver(id)));
+    } catch (_) {
+      return Frame.getBroadcastUuid();
+    }
+  }
 
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   List<DiscoveredUser> get discoveredUsers => _discoveredUsers.values.toList()..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
@@ -166,7 +223,13 @@ class ChatProvider extends ChangeNotifier {
               _messages[index] = _messages[index].copyWith(status: MessageStatus.delivered);
               notifyListeners();
             }
+            _clearOutgoingImage(ackFor); // full image confirmed, free the chunks
           }
+          break;
+
+        case FrameType.nack:
+          _updateUserStats(originStr, viaStr, frame.rssi);
+          _handleIncomingNack(frame);
           break;
 
         case FrameType.voice:
@@ -231,7 +294,7 @@ class ChatProvider extends ChangeNotifier {
       _voiceBuffers.remove(voiceIdStr);
       
       final dir = await getTemporaryDirectory();
-      final file = File('\${dir.path}/$voiceIdStr.m4a');
+      final file = File('${dir.path}/$voiceIdStr.m4a');
       await file.writeAsBytes(fullAudio.toBytes());
 
       final incomingMessage = ChatMessage(
@@ -259,48 +322,175 @@ class ChatProvider extends ChangeNotifier {
     final buffer = ByteData.sublistView(frame.payload);
     final chunkIdx = buffer.getUint16(0, Endian.little);
     final totalChunks = buffer.getUint16(2, Endian.little);
-    final imageIdBytes = frame.payload.sublist(4, 20);
-    final imageData = frame.payload.sublist(20);
-    
+    final imageIdBytes = Uint8List.fromList(frame.payload.sublist(4, 20));
+    final imageData = Uint8List.fromList(frame.payload.sublist(20));
     final imageIdStr = Uuid.unparse(imageIdBytes);
 
-    if (!_imageBuffers.containsKey(imageIdStr)) {
-      _imageBuffers[imageIdStr] = List.filled(totalChunks, Uint8List(0));
+    if (totalChunks == 0 || totalChunks > _maxImageChunks || chunkIdx >= totalChunks) return;
+    if (_completedImages.contains(imageIdStr)) return; // late duplicate of a finished image
+
+    var incoming = _incomingImages[imageIdStr];
+    if (incoming == null) {
+      incoming = _IncomingImage(
+        idBytes: imageIdBytes,
+        senderBytes: Uint8List.fromList(frame.origin),
+        originStr: originStr,
+        viaStr: viaStr,
+        receiverStr: receiverStr,
+        total: totalChunks,
+      );
+      _incomingImages[imageIdStr] = incoming;
+    } else if (incoming.total != totalChunks) {
+      return; // inconsistent header, ignore
     }
 
-    final bufferList = _imageBuffers[imageIdStr]!;
-    if (chunkIdx < totalChunks) {
-      bufferList[chunkIdx] = imageData;
+    if (incoming.chunks[chunkIdx] == null) {
+      incoming.nackCount = 0; // real progress, so the retry budget starts over
+    }
+    incoming.chunks[chunkIdx] = imageData;
+
+    if (incoming.isComplete) {
+      await _finishIncomingImage(imageIdStr, incoming);
+    } else {
+      _armNackTimer(imageIdStr, incoming);
+    }
+  }
+
+  Future<void> _finishIncomingImage(String imageIdStr, _IncomingImage incoming) async {
+    // Remove first so any duplicate chunk arriving during the file write is ignored.
+    incoming.timer?.cancel();
+    _incomingImages.remove(imageIdStr);
+    _completedImages.add(imageIdStr);
+
+    final fullImage = BytesBuilder();
+    for (final chunk in incoming.chunks) {
+      fullImage.add(chunk!);
     }
 
-    if (!bufferList.any((chunk) => chunk.isEmpty)) {
-      final fullImage = BytesBuilder();
-      for (final chunk in bufferList) fullImage.add(chunk);
-      
-      _imageBuffers.remove(imageIdStr);
-      
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/$imageIdStr.jpg');
-      await file.writeAsBytes(fullImage.toBytes());
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/$imageIdStr.jpg');
+    await file.writeAsBytes(fullImage.toBytes());
 
-      final incomingMessage = ChatMessage(
+    if (!_messages.any((m) => m.id == imageIdStr)) {
+      _messages.add(ChatMessage(
         id: imageIdStr,
         timestamp: DateTime.now(),
         type: MessageType.image,
-        origin: originStr,
-        via: viaStr,
-        receiverId: receiverStr,
+        origin: incoming.originStr,
+        via: incoming.viaStr,
+        receiverId: incoming.receiverStr,
         text: file.path,
         isOutgoing: false,
         status: MessageStatus.delivered,
-      );
+      ));
+      notifyListeners();
+      _sendAck(incoming.idBytes, incoming.senderBytes); // ACK the parent image ID
+    }
+  }
 
-      if (!_messages.any((m) => m.id == imageIdStr)) {
-        _messages.add(incomingMessage);
-        notifyListeners();
-        _sendAck(imageIdBytes, frame.origin); // ACK the parent image ID
+  // ---------- Selective retransmission: receiver side ----------
+
+  void _armNackTimer(String imageIdStr, _IncomingImage incoming) {
+    incoming.timer?.cancel();
+    incoming.timer = Timer(_nackSilence, () => _onImageSilence(imageIdStr));
+  }
+
+  void _onImageSilence(String imageIdStr) {
+    final incoming = _incomingImages[imageIdStr];
+    if (incoming == null) return;
+
+    if (incoming.nackCount >= _maxNackRetries) {
+      _incomingImages.remove(imageIdStr);
+      _messages.add(ChatMessage(
+        id: 'imgfail-$imageIdStr',
+        timestamp: DateTime.now(),
+        type: MessageType.system,
+        origin: incoming.originStr,
+        via: incoming.viaStr,
+        receiverId: localPhoneId,
+        text: 'Image failed to arrive (${incoming.receivedCount}/${incoming.total} parts received).',
+        isOutgoing: false,
+        status: MessageStatus.failed,
+      ));
+      notifyListeners();
+      return;
+    }
+
+    incoming.nackCount++;
+    _sendNack(incoming);
+    _armNackTimer(imageIdStr, incoming); // wait again for the retransmission
+  }
+
+  /// NACK payload: imageId(16) + bitmap (bit i of byte i>>3 set = chunk i received).
+  Future<void> _sendNack(_IncomingImage incoming) async {
+    await _waitForInit();
+    final bitmap = Uint8List((incoming.total + 7) ~/ 8);
+    for (int i = 0; i < incoming.total; i++) {
+      if (incoming.chunks[i] != null) bitmap[i >> 3] |= (1 << (i & 7));
+    }
+    final payload = BytesBuilder()
+      ..add(incoming.idBytes)
+      ..add(bitmap);
+
+    final frame = Frame(
+      type: FrameType.nack,
+      origin: _localPhoneIdBytes,
+      via: _localPhoneIdBytes,
+      receiver: incoming.senderBytes,
+      messageId: _uuid.v4obj().toBytes(), // fresh ID so the ESP32 dedup lets it through
+      payload: payload.toBytes(),
+    );
+    await _bluetoothService.sendFrame(frame);
+  }
+
+  // ---------- Selective retransmission: sender side ----------
+
+  void _clearOutgoingImage(String imageIdStr) {
+    _outgoingImages.remove(imageIdStr)?.expiry?.cancel();
+  }
+
+  Future<void> _handleIncomingNack(Frame frame) async {
+    if (frame.payload.length < 17) return;
+    final imageIdStr = Uuid.unparse(frame.payload.sublist(0, 16));
+    final outgoing = _outgoingImages[imageIdStr];
+    if (outgoing == null || outgoing.busy) return;
+
+    final bitmap = frame.payload.sublist(16);
+    final missing = <int>[];
+    for (int i = 0; i < outgoing.payloads.length; i++) {
+      final byteIdx = i >> 3;
+      final received = byteIdx < bitmap.length && (bitmap[byteIdx] & (1 << (i & 7))) != 0;
+      if (!received) missing.add(i);
+    }
+    if (missing.isEmpty) return;
+
+    debugPrint('🔁 NACK for $imageIdStr: resending ${missing.length}/${outgoing.payloads.length} chunks');
+    outgoing.busy = true;
+    outgoing.expiry?.cancel();
+    try {
+      for (final i in missing) {
+        if (!_outgoingImages.containsKey(imageIdStr)) break; // ACKed or expired meanwhile
+        await _sendImageChunk(outgoing.payloads[i], outgoing.receiverBytes);
+        await Future.delayed(_chunkPacing);
+      }
+    } finally {
+      outgoing.busy = false;
+      if (_outgoingImages.containsKey(imageIdStr)) {
+        outgoing.expiry = Timer(_outgoingTtl, () => _clearOutgoingImage(imageIdStr));
       }
     }
+  }
+
+  Future<bool> _sendImageChunk(Uint8List payload, Uint8List receiverBytes) {
+    final frame = Frame(
+      type: FrameType.image,
+      origin: _localPhoneIdBytes,
+      via: _localPhoneIdBytes,
+      receiver: receiverBytes,
+      messageId: _uuid.v4obj().toBytes(), // unique per (re)transmission for ESP32 dedup
+      payload: payload,
+    );
+    return _bluetoothService.sendFrame(frame);
   }
 
   Future<void> _sendAck(Uint8List originalMsgIdBytes, Uint8List receiverBytes) async {
@@ -323,7 +513,7 @@ class ChatProvider extends ChangeNotifier {
 
     final msgIdBytes = _uuid.v4obj().toBytes();
     final msgIdStr = Uuid.unparse(msgIdBytes);
-    final receiverBytes = Uint8List.fromList(Uuid.parse(receiverId));
+    final receiverBytes = _receiverBytes(receiverId);
 
     final outgoingMessage = ChatMessage(
       id: msgIdStr,
@@ -331,7 +521,7 @@ class ChatProvider extends ChangeNotifier {
       type: isSos ? MessageType.sos : MessageType.text,
       origin: localPhoneId,
       via: localPhoneId,
-      receiverId: receiverId,
+      receiverId: _normalizeReceiver(receiverId),
       text: isSos ? "SOS!" : text.trim(),
       isOutgoing: true,
       status: MessageStatus.sending, // Initial state
@@ -361,9 +551,10 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> sendVoiceBytes(Uint8List audioBytes, String receiverId) async {
+    await _waitForInit();
     final msgIdBytes = _uuid.v4obj().toBytes();
     final msgIdStr = Uuid.unparse(msgIdBytes);
-    final receiverBytes = Uint8List.fromList(Uuid.parse(receiverId));
+    final receiverBytes = _receiverBytes(receiverId);
 
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/$msgIdStr.m4a');
@@ -375,7 +566,7 @@ class ChatProvider extends ChangeNotifier {
       type: MessageType.voice,
       origin: localPhoneId,
       via: localPhoneId,
-      receiverId: receiverId,
+      receiverId: _normalizeReceiver(receiverId),
       text: file.path,
       isOutgoing: true,
       status: MessageStatus.sending,
@@ -445,7 +636,7 @@ class ChatProvider extends ChangeNotifier {
     await _waitForInit();
     final msgIdBytes = _uuid.v4obj().toBytes();
     final msgIdStr = Uuid.unparse(msgIdBytes);
-    final receiverBytes = Uint8List.fromList(Uuid.parse(receiverId));
+    final receiverBytes = _receiverBytes(receiverId);
 
     final outgoingMessage = ChatMessage(
       id: msgIdStr,
@@ -453,7 +644,7 @@ class ChatProvider extends ChangeNotifier {
       type: MessageType.location,
       origin: localPhoneId,
       via: localPhoneId,
-      receiverId: receiverId,
+      receiverId: _normalizeReceiver(receiverId),
       text: latLng,
       isOutgoing: true,
       status: MessageStatus.sending,
@@ -483,72 +674,82 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> sendImageBytes(Uint8List imageBytes, String receiverId) async {
+    await _waitForInit();
     final msgIdBytes = _uuid.v4obj().toBytes();
     final msgIdStr = Uuid.unparse(msgIdBytes);
-    final receiverBytes = Uint8List.fromList(Uuid.parse(receiverId));
+    final receiverBytes = _receiverBytes(receiverId);
 
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/$msgIdStr.jpg');
     await file.writeAsBytes(imageBytes);
 
-    final outgoingMessage = ChatMessage(
+    _messages.add(ChatMessage(
       id: msgIdStr,
       timestamp: DateTime.now(),
       type: MessageType.image,
       origin: localPhoneId,
       via: localPhoneId,
-      receiverId: receiverId,
+      receiverId: _normalizeReceiver(receiverId),
       text: file.path,
       isOutgoing: true,
       status: MessageStatus.sending,
-    );
-
-    _messages.add(outgoingMessage);
+    ));
     notifyListeners();
 
-    const maxChunkImageSize = 140; 
-    final totalChunks = (imageBytes.length / maxChunkImageSize).ceil();
+    void setStatus(MessageStatus status) {
+      final index = _messages.indexWhere((m) => m.id == msgIdStr);
+      if (index != -1) {
+        _messages[index] = _messages[index].copyWith(status: status);
+        notifyListeners();
+      }
+    }
+
+    final totalChunks = (imageBytes.length / _maxChunkData).ceil();
+    if (totalChunks == 0 || totalChunks > _maxImageChunks) {
+      setStatus(MessageStatus.failed); // too large for LoRa
+      return;
+    }
+
+    // Build every chunk payload up front and keep them, so NACKs can be answered.
+    final payloads = <Uint8List>[];
+    for (int i = 0; i < totalChunks; i++) {
+      final end = math.min(imageBytes.length, (i + 1) * _maxChunkData);
+      final header = ByteData(4)
+        ..setUint16(0, i, Endian.little)
+        ..setUint16(2, totalChunks, Endian.little);
+      final payload = BytesBuilder()
+        ..add(header.buffer.asUint8List())
+        ..add(msgIdBytes) // parent image ID, so the receiver can group chunks
+        ..add(imageBytes.sublist(i * _maxChunkData, end));
+      payloads.add(payload.toBytes());
+    }
+
+    final outgoing = _OutgoingImage(payloads: payloads, receiverBytes: receiverBytes)..busy = true;
+    _outgoingImages[msgIdStr] = outgoing;
 
     bool allSent = true;
-    for (int i = 0; i < totalChunks; i++) {
-      final end = math.min(imageBytes.length, (i + 1) * maxChunkImageSize);
-      final chunkData = imageBytes.sublist(i * maxChunkImageSize, end);
-      
-      final payload = BytesBuilder();
-      final header = ByteData(4);
-      header.setUint16(0, i, Endian.little);
-      header.setUint16(2, totalChunks, Endian.little);
-      payload.add(header.buffer.asUint8List());
-      payload.add(msgIdBytes);
-      payload.add(chunkData);
-
-      final chunkFrameMsgId = _uuid.v4obj().toBytes();
-
-      final frame = Frame(
-        type: FrameType.image,
-        origin: _localPhoneIdBytes,
-        via: _localPhoneIdBytes,
-        receiver: receiverBytes,
-        messageId: chunkFrameMsgId,
-        payload: payload.toBytes(),
-      );
-
-      final success = await _bluetoothService.sendFrame(frame);
+    for (final payload in payloads) {
+      final success = await _sendImageChunk(payload, receiverBytes);
       if (!success) allSent = false;
-      await Future.delayed(const Duration(milliseconds: 600)); 
+      await Future.delayed(_chunkPacing);
     }
-    
+
+    outgoing.busy = false;
+    if (_outgoingImages.containsKey(msgIdStr)) {
+      // Keep chunks for a while for NACK-driven resends (cleared early on ACK).
+      outgoing.expiry = Timer(_outgoingTtl, () => _clearOutgoingImage(msgIdStr));
+    }
+
+    // Don't downgrade a message that was already ACKed (delivered) while sending.
     final index = _messages.indexWhere((m) => m.id == msgIdStr);
-    if (index != -1) {
-      _messages[index] = _messages[index].copyWith(
-        status: allSent ? MessageStatus.sent : MessageStatus.failed
-      );
-      notifyListeners();
+    if (index != -1 && _messages[index].status == MessageStatus.sending) {
+      setStatus(allSent ? MessageStatus.sent : MessageStatus.failed);
     }
   }
 
   List<ChatMessage> getMessagesForUser(String userId) {
-      return _messages.where((m) => m.receiverId == userId || m.origin == userId || m.receiverId == Uuid.unparse(Frame.getBroadcastUuid())).toList();
+      final id = _normalizeReceiver(userId);
+      return _messages.where((m) => m.receiverId == id || m.origin == id || m.receiverId == Uuid.unparse(Frame.getBroadcastUuid())).toList();
   }
 
   void clearChat() {
@@ -560,6 +761,12 @@ class ChatProvider extends ChangeNotifier {
   void dispose() {
     _incomingSubscription?.cancel();
     _helloTimer?.cancel();
+    for (final incoming in _incomingImages.values) {
+      incoming.timer?.cancel();
+    }
+    for (final outgoing in _outgoingImages.values) {
+      outgoing.expiry?.cancel();
+    }
     super.dispose();
   }
 }

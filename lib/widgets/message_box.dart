@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
@@ -124,41 +125,104 @@ class _MessageBoxState extends State<MessageBox> {
     );
   }
 
+  /// Shrinks [src] until it fits [budget] bytes (~3 KB = ~22 LoRa packets).
+  /// Lowers JPEG quality first, then the image size, and returns the best attempt.
+  Future<Uint8List> compressToBudget(Uint8List src, {int budget = 3000}) async {
+    var side = 160;
+    var quality = 40;
+    Uint8List best = src;
+    while (side >= 64) {
+      final out = await FlutterImageCompress.compressWithList(
+        src,
+        minWidth: side,
+        minHeight: side,
+        quality: quality,
+        format: CompressFormat.jpeg, // WebP encoding is not supported on iOS
+      );
+      best = out;
+      if (out.length <= budget) return out;
+      quality -= 10;
+      if (quality < 15) {
+        quality = 40;
+        side -= 32;
+      }
+    }
+    return best;
+  }
+
   Future<void> _pickImage(ImageSource source) async {
+    final messenger = ScaffoldMessenger.of(context);
     try {
       final picker = ImagePicker();
-      final pickedFile = await picker.pickImage(source: source);
-      if (pickedFile != null && widget.onSendImage != null) {
-        // Compress heavily for LoRa
-        final bytes = await pickedFile.readAsBytes();
-        final compressed = await FlutterImageCompress.compressWithList(
-          bytes,
-          minWidth: 150,
-          minHeight: 150,
-          quality: 30, 
-        );
-        widget.onSendImage!(compressed);
-      }
+      final pickedFile = await picker.pickImage(
+        source: source,
+        maxWidth: 1024,
+        maxHeight: 1024,
+      );
+      if (pickedFile == null || widget.onSendImage == null) return;
+
+      final bytes = await pickedFile.readAsBytes();
+      final compressed = await compressToBudget(bytes);
+      final packets = (compressed.length / 140).ceil();
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            'Sending image: ${(compressed.length / 1024).toStringAsFixed(1)} KB (~$packets packets)'),
+      ));
+      widget.onSendImage!(compressed);
     } catch (e) {
       debugPrint('Image pick error: $e');
+      messenger.showSnackBar(SnackBar(content: Text('Could not send image: $e')));
     }
   }
 
   Future<void> _shareLocation() async {
+    final messenger = ScaffoldMessenger.of(context);
+    void say(String msg) => messenger.showSnackBar(SnackBar(content: Text(msg)));
+    String fmt(Position p) =>
+        '${p.latitude.toStringAsFixed(6)},${p.longitude.toStringAsFixed(6)}';
+
     try {
-      LocationPermission permission = await Geolocator.checkPermission();
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        say('Turn on device location (GPS) first.');
+        await Geolocator.openLocationSettings();
+        return;
+      }
+
+      var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return;
       }
-      if (permission == LocationPermission.deniedForever) return;
+      if (permission == LocationPermission.denied) {
+        say('Location permission denied.');
+        return;
+      }
+      if (permission == LocationPermission.deniedForever) {
+        say('Location permission is blocked. Enable it in app settings.');
+        await Geolocator.openAppSettings();
+        return;
+      }
 
-      Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
-      if (widget.onSendLocation != null) {
-        widget.onSendLocation!('${position.latitude},${position.longitude}');
+      say('Getting GPS fix…');
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 15),
+          ),
+        );
+        widget.onSendLocation?.call(fmt(pos));
+      } on TimeoutException {
+        final last = await Geolocator.getLastKnownPosition();
+        if (last == null) {
+          say('No GPS fix. Try near a window or outdoors.');
+          return;
+        }
+        say('No live fix - sending last known location.');
+        widget.onSendLocation?.call(fmt(last));
       }
     } catch (e) {
       debugPrint('Location error: $e');
+      say('Location error: $e');
     }
   }
 

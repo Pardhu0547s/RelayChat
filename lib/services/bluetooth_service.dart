@@ -33,6 +33,19 @@ class BluetoothService {
   // Frame reassembly buffer
   final BytesBuilder _rxBuffer = BytesBuilder();
 
+  // Active BLE subscriptions. Cancelled on every (re)connect/disconnect so we never
+  // end up with duplicate listeners feeding the same reassembly buffer.
+  StreamSubscription<List<int>>? _rxSub;
+  StreamSubscription<fbp.BluetoothConnectionState>? _connSub;
+
+  Future<void> _cancelSubscriptions() async {
+    await _rxSub?.cancel();
+    await _connSub?.cancel();
+    _rxSub = null;
+    _connSub = null;
+    _rxBuffer.clear();
+  }
+
   // ──────────────────────────────────────────────────────────
   //  Saved Device (Auto-Reconnect)
   // ──────────────────────────────────────────────────────────
@@ -58,6 +71,7 @@ class BluetoothService {
 
     _connectionProgressController.add(0.1);
     try {
+      await _cancelSubscriptions();
       final nativeDevice = fbp.BluetoothDevice.fromId(mac);
       _connectionProgressController.add(0.2);
       
@@ -69,13 +83,15 @@ class BluetoothService {
         } catch (_) {}
       }
 
-      nativeDevice.connectionState.listen((state) {
+      _connSub = nativeDevice.connectionState.listen((state) {
         if (state == fbp.BluetoothConnectionState.disconnected) {
           if (_connectedDevice != null) {
             _connectedDevice = null;
             _txCharacteristic = null;
             _rxCharacteristic = null;
             _rxBuffer.clear();
+            _rxSub?.cancel();
+            _rxSub = null;
             _deviceDisconnectedController.add(true);
           }
         }
@@ -99,7 +115,7 @@ class BluetoothService {
 
       if (_rxCharacteristic != null) {
         await _rxCharacteristic!.setNotifyValue(true);
-        _rxCharacteristic!.onValueReceived.listen(_handleIncomingBleBytes);
+        _rxSub = _rxCharacteristic!.onValueReceived.listen(_handleIncomingBleBytes);
       }
 
       _connectionProgressController.add(1.0);
@@ -234,6 +250,7 @@ class BluetoothService {
       final nativeDevice = device.nativeDevice as fbp.BluetoothDevice?;
       if (nativeDevice == null) return false;
 
+      await _cancelSubscriptions();
       _connectionProgressController.add(0.2);
       await nativeDevice.connect(license: fbp.License.nonprofit, timeout: const Duration(seconds: 10));
       
@@ -243,12 +260,14 @@ class BluetoothService {
         } catch (_) {}
       }
       
-      nativeDevice.connectionState.listen((state) {
+      _connSub = nativeDevice.connectionState.listen((state) {
         if (state == fbp.BluetoothConnectionState.disconnected) {
           if (_connectedDevice != null) {
              _connectedDevice = null;
              _rxBuffer.clear();
-             _deviceDisconnectedController.add(true);
+             _rxSub?.cancel();
+            _rxSub = null;
+            _deviceDisconnectedController.add(true);
           }
         }
       });
@@ -271,7 +290,7 @@ class BluetoothService {
 
       if (_rxCharacteristic != null) {
         await _rxCharacteristic!.setNotifyValue(true);
-        _rxCharacteristic!.onValueReceived.listen(_handleIncomingBleBytes);
+        _rxSub = _rxCharacteristic!.onValueReceived.listen(_handleIncomingBleBytes);
       }
 
       _connectionProgressController.add(1.0);
@@ -286,10 +305,14 @@ class BluetoothService {
   }
 
   Future<void> disconnect() async {
+    await _rxSub?.cancel();
+    _rxSub = null;
     try {
       final nativeDevice = _connectedDevice?.nativeDevice as fbp.BluetoothDevice?;
       if (nativeDevice != null) await nativeDevice.disconnect();
     } catch (_) {}
+    await _connSub?.cancel();
+    _connSub = null;
     _txCharacteristic = null;
     _rxCharacteristic = null;
     _connectedDevice = null;

@@ -103,5 +103,29 @@ void main() {
         payload: payload,
       ), throwsArgumentError);
     });
+
+    test('NACK frame round-trips with type code 0x06 and bitmap payload', () {
+      final imageId = uuid.v4obj().toBytes();
+      final bitmap = Uint8List.fromList([0xFF, 0x0F]); // chunks 0-11 received
+      final payload = Uint8List.fromList([...imageId, ...bitmap]);
+
+      final frame = Frame(
+        type: FrameType.nack,
+        origin: origin,
+        via: via,
+        receiver: receiver,
+        messageId: messageId,
+        payload: payload,
+      );
+
+      final bytes = frame.encode();
+      expect(bytes[2], 0x06);
+
+      final decoded = Frame.decode(bytes);
+      expect(decoded, isNotNull);
+      expect(decoded!.type, FrameType.nack);
+      expect(decoded.payload.sublist(0, 16), imageId);
+      expect(decoded.payload.sublist(16), bitmap);
+    });
   });
 }

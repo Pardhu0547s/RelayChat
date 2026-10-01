@@ -106,6 +106,7 @@ void routeFrame(uint8_t* frame, size_t len, const char* source) {
         LoRa.beginPacket();
         LoRa.write(frame, len);
         LoRa.endPacket();
+        LoRa.receive(); // return to RX mode so we do not miss packets
         Serial.println("  ✅ LoRa packet sent");
     } 
     else if (strcmp(source, "LoRa") == 0) {
@@ -129,6 +130,7 @@ void routeFrame(uint8_t* frame, size_t len, const char* source) {
             LoRa.beginPacket();
             LoRa.write(frame, len);
             LoRa.endPacket();
+            LoRa.receive(); // return to RX mode so we do not miss packets
         }
     }
 }
