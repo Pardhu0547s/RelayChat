@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'dart:convert';
 
-enum FrameType { text, ack, hello, voice, image, location, nack, unknown }
+enum FrameType { text, ack, hello, voice, image, location, nack, sos, unknown }
 
 class Frame {
   static const int MAGIC_BYTE = 0xAA;
@@ -48,6 +48,7 @@ class Frame {
       case FrameType.image: return 0x04;
       case FrameType.location: return 0x05;
       case FrameType.nack: return 0x06;
+      case FrameType.sos: return 0x07;
       default: return 0xFF;
     }
   }
@@ -61,6 +62,7 @@ class Frame {
       case 0x04: return FrameType.image;
       case 0x05: return FrameType.location;
       case 0x06: return FrameType.nack;
+      case 0x07: return FrameType.sos;
       default: return FrameType.unknown;
     }
   }

@@ -1,15 +1,22 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import '../models/bluetooth_device.dart';
 import '../models/message.dart';
 import '../models/user.dart';
 import '../services/bluetooth_service.dart';
+import '../utils/color_image_codec.dart';
+import '../utils/color_paper_codec.dart';
+import '../utils/paper_codec.dart';
 import '../utils/protocol.dart';
+import '../utils/transfer_config.dart';
 
 /// Reassembly state for an image that is currently arriving over LoRa.
 class _IncomingImage {
@@ -48,16 +55,31 @@ class _OutgoingImage {
 
 class ChatProvider extends ChangeNotifier {
   // ---- Image reliability tuning ----
-  static const int _maxChunkData = 140; // image bytes per LoRa packet
-  static const int _maxImageChunks = 128; // sanity bound against corrupt headers
-  static const Duration _nackSilence = Duration(seconds: 8);
+  static const int _maxChunkData = TransferConfig.chunkDataBytes; // data bytes per LoRa packet
+  static const int _maxImageChunks = TransferConfig.maxChunks; // sanity bound against corrupt headers
+  // How long the receiver waits before asking for missing chunks:
+  //  - _tailWait: after the LAST chunk arrived (the sender is done, only stragglers remain)
+  //  - _nackSilence: when the stream just goes quiet (last chunk lost / mid-burst gap).
+  // Chunks are ~0.5 s apart, so 3.5 s of silence is already ~7 missed slots.
+  static const Duration _tailWait = Duration(milliseconds: 1500);
+  static const Duration _nackSilence = Duration(milliseconds: 3500);
   static const int _maxNackRetries = 3;
   static const Duration _outgoingTtl = Duration(minutes: 2);
-  static const Duration _chunkPacing = Duration(milliseconds: 600);
+  static const Duration _chunkPacing = TransferConfig.chunkPacing;
 
   final BluetoothService _bluetoothService = BluetoothService();
   final List<ChatMessage> _messages = [];
   final Map<String, DiscoveredUser> _discoveredUsers = {};
+
+  // ---- SOS alarm: plays on the device that RECEIVES an SOS, never on the sender ----
+  static const String _sosSound = 'Sounds/soundreality-sos-signal-137144.mp3';
+  static const Duration _sosAutoStop = Duration(minutes: 2);
+  final AudioPlayer _sosPlayer = AudioPlayer();
+  Timer? _sosTimer;
+  bool _sosAlarmActive = false;
+  String _sosFromName = 'a nearby device';
+  bool get sosAlarmActive => _sosAlarmActive;
+  String get sosFromName => _sosFromName;
   
   final Map<String, List<Uint8List>> _voiceBuffers = {};
   final Map<String, _IncomingImage> _incomingImages = {};
@@ -65,7 +87,12 @@ class ChatProvider extends ChangeNotifier {
   final Set<String> _completedImages = {};
   
   StreamSubscription<Frame>? _incomingSubscription;
+  StreamSubscription<RelayDevice>? _deviceConnectedSub;
   Timer? _helloTimer;
+  Timer? _saveUsersDebounce;
+  DateTime? _lastHelloBroadcast;
+  final Map<String, DateTime> _lastHelloReplySent = {};
+  static const String _usersCacheKey = 'discovered_users_cache';
   
   final Uuid _uuid = const Uuid();
   late Uint8List _localPhoneIdBytes;
@@ -111,19 +138,58 @@ class ChatProvider extends ChangeNotifier {
     localName = prefs.getString('local_name') ?? "User ${localPhoneId.substring(0, 4)}";
     
     debugPrint('📱 My Phone ID: $localPhoneId');
+    await _loadDiscoveredUsers();
     _listenToIncomingData();
+    _deviceConnectedSub = _bluetoothService.deviceConnected.listen((device) {
+      debugPrint('📱 Device connected: ${device.name}, triggering discovery burst');
+      onDeviceConnected();
+    });
     _startHelloBroadcast();
+  }
+
+  Future<void> _loadDiscoveredUsers() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = prefs.getStringList(_usersCacheKey);
+      if (jsonList != null) {
+        for (final item in jsonList) {
+          final map = jsonDecode(item) as Map<String, dynamic>;
+          final user = DiscoveredUser.fromJson(map);
+          _discoveredUsers[user.phoneId] = user;
+        }
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Error loading cached users: $e');
+    }
+  }
+
+  void _saveDiscoveredUsersDebounced() {
+    _saveUsersDebounce?.cancel();
+    _saveUsersDebounce = Timer(const Duration(seconds: 2), () async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final list = _discoveredUsers.values.map((u) => jsonEncode(u.toJson())).toList();
+        await prefs.setStringList(_usersCacheKey, list);
+      } catch (e) {
+        debugPrint('Error saving discovered users: $e');
+      }
+    });
   }
   
   void _startHelloBroadcast() {
-    _helloTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+    _helloTimer?.cancel();
+    _helloTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       _broadcastHello();
     });
   }
+
+  Future<void> broadcastHello() => _broadcastHello();
   
   Future<void> _broadcastHello() async {
     await _waitForInit();
     if (_bluetoothService.connectedDevice == null) return;
+    _lastHelloBroadcast = DateTime.now();
     
     final msgIdBytes = _uuid.v4obj().toBytes();
     final frame = Frame(
@@ -139,7 +205,32 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void onDeviceConnected() {
+    // 3-stage burst on connect ensures fast bidirectional discovery
+    _broadcastHello();
     Future.delayed(const Duration(seconds: 2), () {
+      _broadcastHello();
+    });
+    Future.delayed(const Duration(seconds: 5), () {
+      _broadcastHello();
+    });
+    _startHelloBroadcast();
+  }
+
+  void _respondToHello(String peerPhoneId) {
+    final now = DateTime.now();
+    // Don't reply if we broadcasted very recently (< 4s) to avoid LoRa congestion
+    if (_lastHelloBroadcast != null && now.difference(_lastHelloBroadcast!) < const Duration(seconds: 4)) {
+      return;
+    }
+    // Don't reply to the same peer more than once every 12 seconds
+    final lastReply = _lastHelloReplySent[peerPhoneId];
+    if (lastReply != null && now.difference(lastReply) < const Duration(seconds: 12)) {
+      return;
+    }
+    _lastHelloReplySent[peerPhoneId] = now;
+    // Jitter delay (200-500ms) prevents half-duplex LoRa collisions
+    final jitter = 200 + math.Random().nextInt(300);
+    Future.delayed(Duration(milliseconds: jitter), () {
       _broadcastHello();
     });
   }
@@ -174,6 +265,7 @@ class ChatProvider extends ChangeNotifier {
         distance: distance,
       );
     }
+    _saveDiscoveredUsersDebounced();
     notifyListeners();
   }
 
@@ -191,6 +283,7 @@ class ChatProvider extends ChangeNotifier {
         case FrameType.hello:
           final senderName = Frame.bytesToUtf8(frame.payload);
           _updateUserStats(originStr, viaStr, frame.rssi, name: senderName);
+          _respondToHello(originStr);
           break;
 
         case FrameType.text:
@@ -224,6 +317,26 @@ class ChatProvider extends ChangeNotifier {
               notifyListeners();
             }
             _clearOutgoingImage(ackFor); // full image confirmed, free the chunks
+          }
+          break;
+
+        case FrameType.sos:
+          _updateUserStats(originStr, viaStr, frame.rssi);
+          if (!_messages.any((m) => m.id == msgIdStr)) {
+            _messages.add(ChatMessage(
+              id: msgIdStr,
+              timestamp: DateTime.now(),
+              type: MessageType.sos,
+              origin: originStr,
+              via: viaStr,
+              receiverId: receiverStr,
+              text: 'SOS!',
+              isOutgoing: false,
+              status: MessageStatus.delivered,
+            ));
+            notifyListeners();
+            _sendAck(frame.messageId, frame.origin);
+            _startSosAlarm(originStr);
           }
           break;
 
@@ -352,7 +465,8 @@ class ChatProvider extends ChangeNotifier {
     if (incoming.isComplete) {
       await _finishIncomingImage(imageIdStr, incoming);
     } else {
-      _armNackTimer(imageIdStr, incoming);
+      final isTail = chunkIdx == totalChunks - 1;
+      _armNackTimer(imageIdStr, incoming, isTail ? _tailWait : _nackSilence);
     }
   }
 
@@ -362,37 +476,80 @@ class ChatProvider extends ChangeNotifier {
     _incomingImages.remove(imageIdStr);
     _completedImages.add(imageIdStr);
 
-    final fullImage = BytesBuilder();
+    final assembled = BytesBuilder();
     for (final chunk in incoming.chunks) {
-      fullImage.add(chunk!);
+      assembled.add(chunk!);
     }
+    final data = assembled.toBytes();
+    if (_messages.any((m) => m.id == imageIdStr)) return;
 
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$imageIdStr.jpg');
-    await file.writeAsBytes(fullImage.toBytes());
-
-    if (!_messages.any((m) => m.id == imageIdStr)) {
+    final file = await _saveForDisplay(imageIdStr, data); // photo -> .jpg, paper -> unfolded .png
+    if (file == null) {
       _messages.add(ChatMessage(
-        id: imageIdStr,
+        id: 'imgfail-$imageIdStr',
         timestamp: DateTime.now(),
-        type: MessageType.image,
+        type: MessageType.system,
         origin: incoming.originStr,
         via: incoming.viaStr,
-        receiverId: incoming.receiverStr,
-        text: file.path,
+        receiverId: localPhoneId,
+        text: 'Received an image that could not be decoded.',
         isOutgoing: false,
-        status: MessageStatus.delivered,
+        status: MessageStatus.failed,
       ));
       notifyListeners();
-      _sendAck(incoming.idBytes, incoming.senderBytes); // ACK the parent image ID
+      return;
     }
+
+    _messages.add(ChatMessage(
+      id: imageIdStr,
+      timestamp: DateTime.now(),
+      type: MessageType.image,
+      origin: incoming.originStr,
+      via: incoming.viaStr,
+      receiverId: incoming.receiverStr,
+      text: file.path,
+      isOutgoing: false,
+      status: MessageStatus.delivered,
+    ));
+    notifyListeners();
+    _sendAck(incoming.idBytes, incoming.senderBytes); // ACK the parent image ID
+  }
+
+  /// Writes what we received (or sent) to a displayable image file.
+  /// Paper blobs (B&W or color) are "unfolded" into a smooth 2x PNG; photos are stored as-is.
+  Future<File?> _saveForDisplay(String idStr, Uint8List data) async {
+    final dir = await getTemporaryDirectory();
+    if (PaperCodec.isPaper(data)) {
+      final bmp = PaperCodec.unpack(data);
+      if (bmp == null) return null;
+      final file = File('${dir.path}/$idStr.png');
+      await file.writeAsBytes(await PaperCodec.toPng(bmp));
+      return file;
+    }
+    if (ColorPaperCodec.isColorPaper(data)) {
+      final bmp = ColorPaperCodec.unpack(data);
+      if (bmp == null) return null;
+      final file = File('${dir.path}/$idStr.png');
+      await file.writeAsBytes(await ColorPaperCodec.toPng(bmp));
+      return file;
+    }
+    if (ColorImageCodec.isColorImage(data)) {
+      final bmp = ColorImageCodec.unpack(data);
+      if (bmp == null) return null;
+      final file = File('${dir.path}/$idStr.png');
+      await file.writeAsBytes(await ColorImageCodec.toPng(bmp));
+      return file;
+    }
+    final file = File('${dir.path}/$idStr.jpg');
+    await file.writeAsBytes(data);
+    return file;
   }
 
   // ---------- Selective retransmission: receiver side ----------
 
-  void _armNackTimer(String imageIdStr, _IncomingImage incoming) {
+  void _armNackTimer(String imageIdStr, _IncomingImage incoming, [Duration wait = _nackSilence]) {
     incoming.timer?.cancel();
-    incoming.timer = Timer(_nackSilence, () => _onImageSilence(imageIdStr));
+    incoming.timer = Timer(wait, () => _onImageSilence(imageIdStr));
   }
 
   void _onImageSilence(String imageIdStr) {
@@ -408,7 +565,7 @@ class ChatProvider extends ChangeNotifier {
         origin: incoming.originStr,
         via: incoming.viaStr,
         receiverId: localPhoneId,
-        text: 'Image failed to arrive (${incoming.receivedCount}/${incoming.total} parts received).',
+        text: 'Incoming image or scan failed to arrive (${incoming.receivedCount}/${incoming.total} parts received).',
         isOutgoing: false,
         status: MessageStatus.failed,
       ));
@@ -507,6 +664,45 @@ class ChatProvider extends ChangeNotifier {
     await _bluetoothService.sendFrame(frame);
   }
 
+  Future<void> _startSosAlarm(String originStr) async {
+    _sosFromName = _discoveredUsers[originStr]?.name ?? 'a nearby device';
+    _sosAlarmActive = true;
+    notifyListeners();
+
+    _sosTimer?.cancel();
+    _sosTimer = Timer(_sosAutoStop, stopSosAlarm); // never ring forever
+    try {
+      // Alarm audio stream: still audible in silent/vibrate mode on most phones.
+      await _sosPlayer.setAudioContext(AudioContext(
+        android: AudioContextAndroid(
+          isSpeakerphoneOn: true,
+          stayAwake: true,
+          contentType: AndroidContentType.sonification,
+          usageType: AndroidUsageType.alarm,
+          audioFocus: AndroidAudioFocus.gain,
+        ),
+        iOS: AudioContextIOS(category: AVAudioSessionCategory.playback),
+      ));
+      await _sosPlayer.setReleaseMode(ReleaseMode.loop);
+      await _sosPlayer.setVolume(1.0);
+      await _sosPlayer.play(AssetSource(_sosSound));
+    } catch (e) {
+      debugPrint('SOS alarm playback failed: $e');
+    }
+  }
+
+  Future<void> stopSosAlarm() async {
+    _sosTimer?.cancel();
+    _sosTimer = null;
+    try {
+      await _sosPlayer.stop();
+    } catch (_) {}
+    if (_sosAlarmActive) {
+      _sosAlarmActive = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> sendMessage(String text, String receiverId, {bool isSos = false}) async {
     await _waitForInit();
     if (text.trim().isEmpty && !isSos) return;
@@ -531,7 +727,7 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     final frame = Frame(
-      type: FrameType.text,
+      type: isSos ? FrameType.sos : FrameType.text,
       origin: _localPhoneIdBytes,
       via: _localPhoneIdBytes,
       receiver: receiverBytes,
@@ -673,29 +869,35 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  /// [imageBytes] is either a compressed photo (JPEG) or a paper blob from [PaperCodec].
   Future<void> sendImageBytes(Uint8List imageBytes, String receiverId) async {
     await _waitForInit();
     final msgIdBytes = _uuid.v4obj().toBytes();
     final msgIdStr = Uuid.unparse(msgIdBytes);
-    final receiverBytes = _receiverBytes(receiverId);
 
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$msgIdStr.jpg');
-    await file.writeAsBytes(imageBytes);
+    final file = await _saveForDisplay(msgIdStr, imageBytes);
+    if (file == null) return; // invalid paper blob, nothing to send
+    _addOutgoing(msgIdStr, MessageType.image, receiverId, file.path);
+    await _transmitBlob(msgIdStr, msgIdBytes, imageBytes, _receiverBytes(receiverId));
+  }
 
+  void _addOutgoing(String msgIdStr, MessageType type, String receiverId, String text) {
     _messages.add(ChatMessage(
       id: msgIdStr,
       timestamp: DateTime.now(),
-      type: MessageType.image,
+      type: type,
       origin: localPhoneId,
       via: localPhoneId,
       receiverId: _normalizeReceiver(receiverId),
-      text: file.path,
+      text: text,
       isOutgoing: true,
       status: MessageStatus.sending,
     ));
     notifyListeners();
+  }
 
+  /// Splits [blob] into chunks, sends them, and keeps them for NACK-driven resends.
+  Future<void> _transmitBlob(String msgIdStr, Uint8List msgIdBytes, Uint8List blob, Uint8List receiverBytes) async {
     void setStatus(MessageStatus status) {
       final index = _messages.indexWhere((m) => m.id == msgIdStr);
       if (index != -1) {
@@ -704,7 +906,7 @@ class ChatProvider extends ChangeNotifier {
       }
     }
 
-    final totalChunks = (imageBytes.length / _maxChunkData).ceil();
+    final totalChunks = (blob.length / _maxChunkData).ceil();
     if (totalChunks == 0 || totalChunks > _maxImageChunks) {
       setStatus(MessageStatus.failed); // too large for LoRa
       return;
@@ -713,14 +915,14 @@ class ChatProvider extends ChangeNotifier {
     // Build every chunk payload up front and keep them, so NACKs can be answered.
     final payloads = <Uint8List>[];
     for (int i = 0; i < totalChunks; i++) {
-      final end = math.min(imageBytes.length, (i + 1) * _maxChunkData);
+      final end = math.min(blob.length, (i + 1) * _maxChunkData);
       final header = ByteData(4)
         ..setUint16(0, i, Endian.little)
         ..setUint16(2, totalChunks, Endian.little);
       final payload = BytesBuilder()
         ..add(header.buffer.asUint8List())
-        ..add(msgIdBytes) // parent image ID, so the receiver can group chunks
-        ..add(imageBytes.sublist(i * _maxChunkData, end));
+        ..add(msgIdBytes) // parent message ID, so the receiver can group chunks
+        ..add(blob.sublist(i * _maxChunkData, end));
       payloads.add(payload.toBytes());
     }
 
@@ -760,7 +962,11 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _incomingSubscription?.cancel();
+    _deviceConnectedSub?.cancel();
     _helloTimer?.cancel();
+    _saveUsersDebounce?.cancel();
+    _sosTimer?.cancel();
+    _sosPlayer.dispose();
     for (final incoming in _incomingImages.values) {
       incoming.timer?.cancel();
     }

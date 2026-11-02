@@ -1,17 +1,17 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:audioplayers/audioplayers.dart';
-import '../../models/message.dart';
 import '../../models/user.dart';
 import '../../providers/bluetooth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../utils/colors.dart';
 import '../../utils/constants.dart';
+import '../../widgets/brand_logo.dart';
 import '../../widgets/message_box.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/status_badge.dart';
+import '../../widgets/user_avatar.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -74,8 +74,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final themeProvider = Provider.of<ThemeProvider>(context);
-    final targetName = _targetUser?.name ?? 'Broadcast Channel';
-    final targetId = _targetUser?.phoneId ?? 'BROADCAST';
+    final targetName = _targetUser?.name ?? 'Public Mesh Broadcast';
+    final isBroadcast = _targetUser == null;
 
     final textPrimary = AppColors.getTextPrimary(context);
     final cardBg = AppColors.getCard(context);
@@ -87,51 +87,141 @@ class _ChatScreenState extends State<ChatScreen> {
       backgroundColor: background,
       appBar: AppBar(
         backgroundColor: cardBg,
-        elevation: 1,
-        shadowColor: Colors.black26,
+        elevation: 0.5,
+        shadowColor: Colors.black12,
+        leadingWidth: 40,
         leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: textPrimary),
-          onPressed: () {
-            Navigator.pop(context);
-          },
+          icon: Icon(Icons.arrow_back_ios_new_rounded, color: textPrimary, size: 20),
+          onPressed: () => Navigator.pop(context),
         ),
-        title: Text(
-          targetName,
-          style: TextStyle(
-            color: textPrimary,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+        titleSpacing: 0,
+        title: Row(
+          children: [
+            if (isBroadcast)
+              const BrandLogo(size: 34, showGlow: true)
+            else
+              UserAvatar(
+                name: targetName,
+                isOnline: true,
+                size: 34,
+              ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    targetName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: isBroadcast ? AppColors.secondary : AppColors.primary,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          isBroadcast
+                              ? 'Off-Grid Mesh • All nodes'
+                              : 'Connected via ESP-NOW Mesh',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: subtitleColor,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
         actions: [
-          IconButton(
-            tooltip: 'Send SOS',
-            icon: const Icon(Icons.warning_rounded, color: Colors.redAccent),
-            onPressed: () {
-              Provider.of<ChatProvider>(context, listen: false)
-                  .sendMessage('', 'BROADCAST', isSos: true);
-              
-              final player = AudioPlayer();
-              player.play(AssetSource('Sounds/soundreality-sos-signal-137144.mp3'));
-            },
+          // Sleek SOS Emergency Action Pill
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            child: Material(
+              color: Colors.redAccent.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(16),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () {
+                  Provider.of<ChatProvider>(context, listen: false)
+                      .sendMessage('', 'BROADCAST', isSos: true);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded, color: Colors.white),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text('🚨 SOS Alert Broadcasted to All Mesh Nodes!'),
+                          ),
+                        ],
+                      ),
+                      backgroundColor: Colors.redAccent,
+                      duration: Duration(seconds: 4),
+                    ),
+                  );
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 15),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'SOS',
+                        style: TextStyle(
+                          color: Colors.redAccent,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
           IconButton(
-            tooltip: 'Toggle Light / Dark Mode',
+            tooltip: 'Toggle Theme',
             icon: Icon(
               themeProvider.isDarkMode
                   ? Icons.wb_sunny_rounded
                   : Icons.nightlight_round,
+              size: 20,
               color: themeProvider.isDarkMode
                   ? Colors.amber
                   : AppColors.primary,
             ),
-            onPressed: () {
-              themeProvider.toggleTheme();
-            },
+            onPressed: () => themeProvider.toggleTheme(),
           ),
           PopupMenuButton<String>(
-            icon: Icon(Icons.more_vert, color: textPrimary),
+            icon: Icon(Icons.more_vert_rounded, color: textPrimary),
             color: cardBg,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             onSelected: (value) {
               if (value == 'clear') {
                 Provider.of<ChatProvider>(context, listen: false).clearChat();
@@ -143,15 +233,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   value: 'clear',
                   child: Row(
                     children: [
-                      Icon(Icons.delete_outline, color: AppColors.error, size: 18),
-                      SizedBox(width: 8),
-                      Text('Clear Chat', style: TextStyle(color: AppColors.error)),
+                      Icon(Icons.delete_outline_rounded, color: AppColors.error, size: 18),
+                      SizedBox(width: 10),
+                      Text('Clear Chat', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w500)),
                     ],
                   ),
                 ),
               ];
             },
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: Consumer<ChatProvider>(
@@ -171,49 +262,26 @@ class _ChatScreenState extends State<ChatScreen> {
           return Column(
             children: [
               // Messages Header Bar
+              // Messages Header Bar
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
                 color: background,
-                child: Column(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
-                      currentUser?.name ?? targetName,
-                      style: TextStyle(
-                        color: subtitleColor,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1,
-                      ),
+                    const StatusBadge(
+                      label: 'ESP-NOW Mesh Active',
+                      isPositive: true,
                     ),
-                    if (distance > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4.0),
-                        child: Text(
-                          '≈ ${distance.toStringAsFixed(1)}m away',
-                          style: TextStyle(
-                            color: AppColors.primary,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
+                    if (distance > 0) ...[
+                      const SizedBox(width: 8),
+                      StatusBadge(
+                        label: '≈ ${distance.toStringAsFixed(1)}m away',
+                        customIcon: Icons.near_me_rounded,
+                        customColor: AppColors.primary,
                       ),
-                    const SizedBox(height: 6),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const StatusBadge(
-                          label: 'Connected via LoRa',
-                          isPositive: true,
-                        ),
-                        const SizedBox(width: 8),
-                        const StatusBadge(
-                          label: 'Encryption: Off',
-                          customIcon: Icons.lock_outline,
-                          customColor: AppColors.secondary,
-                        ),
-                      ],
-                    ),
+                    ],
                   ],
                 ),
               ),

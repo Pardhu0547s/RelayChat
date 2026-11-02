@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
 import 'package:permission_handler/permission_handler.dart';
@@ -23,6 +24,9 @@ class BluetoothService {
 
   final StreamController<bool> _deviceDisconnectedController = StreamController<bool>.broadcast();
   Stream<bool> get deviceDisconnected => _deviceDisconnectedController.stream;
+
+  final StreamController<RelayDevice> _deviceConnectedController = StreamController<RelayDevice>.broadcast();
+  Stream<RelayDevice> get deviceConnected => _deviceConnectedController.stream;
 
   RelayDevice? _connectedDevice;
   RelayDevice? get connectedDevice => _connectedDevice;
@@ -127,6 +131,7 @@ class BluetoothService {
         isAvailable: true,
         nativeDevice: nativeDevice,
       );
+      _deviceConnectedController.add(_connectedDevice!);
 
       return true;
     } catch (e) {
@@ -296,6 +301,7 @@ class BluetoothService {
       _connectionProgressController.add(1.0);
       _connectedDevice = device.copyWith(rssi: await nativeDevice.readRssi().catchError((_) => device.rssi));
       await saveLastDevice(device.id);
+      _deviceConnectedController.add(_connectedDevice!);
 
       return true;
     } catch (e) {
@@ -402,5 +408,6 @@ class BluetoothService {
     _incomingFrameController.close();
     _connectionProgressController.close();
     _deviceDisconnectedController.close();
+    _deviceConnectedController.close();
   }
 }

@@ -5,6 +5,7 @@ import '../../providers/theme_provider.dart';
 import '../../utils/colors.dart';
 import '../../utils/constants.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/brand_logo.dart';
 import '../../widgets/device_card.dart';
 
 class DeviceScannerScreen extends StatefulWidget {
@@ -37,13 +38,20 @@ class _DeviceScannerScreenState extends State<DeviceScannerScreen> {
       appBar: AppBar(
         backgroundColor: AppColors.getBackground(context),
         elevation: 0,
-        title: Text(
-          'RelayChat',
-          style: TextStyle(
-            color: textPrimary,
-            fontWeight: FontWeight.bold,
-            fontSize: 22,
-          ),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const BrandLogo(size: 28),
+            const SizedBox(width: 10),
+            Text(
+              'RelayChat',
+              style: TextStyle(
+                color: textPrimary,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.5,
+              ),
+            ),
+          ],
         ),
         centerTitle: true,
         actions: [

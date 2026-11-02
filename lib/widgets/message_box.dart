@@ -6,9 +6,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:geolocator/geolocator.dart';
 import '../utils/colors.dart';
+import '../utils/transfer_config.dart';
+import '../utils/image_fold.dart';
 
 class MessageBox extends StatefulWidget {
   final Function(String) onSend;
@@ -83,92 +84,139 @@ class _MessageBoxState extends State<MessageBox> {
   }
 
   Future<void> _handleAttachment() async {
+    final textPrimary = AppColors.getTextPrimary(context);
+    final subtitleColor = AppColors.getSubtitle(context);
+
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.getCard(context),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.camera_alt, color: AppColors.primary),
-                title: Text('Take Photo', style: TextStyle(color: AppColors.getTextPrimary(context))),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.camera);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.image, color: AppColors.secondary),
-                title: Text('Gallery', style: TextStyle(color: AppColors.getTextPrimary(context))),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.gallery);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.location_on, color: AppColors.error),
-                title: Text('Share Location', style: TextStyle(color: AppColors.getTextPrimary(context))),
-                onTap: () {
-                  Navigator.pop(context);
-                  _shareLocation();
-                },
-              ),
-            ],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: subtitleColor.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Text(
+                  'Share Over Mesh',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Optimized for rapid transmission over off-grid ESP-NOW',
+                  style: TextStyle(fontSize: 12, color: subtitleColor),
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.camera_alt_rounded, color: AppColors.primary, size: 22),
+                  ),
+                  title: Text('Take Photo', style: TextStyle(color: textPrimary, fontWeight: FontWeight.w600)),
+                  subtitle: Text('Capture and compress for instant mesh transfer', style: TextStyle(color: subtitleColor, fontSize: 12)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _pickImage(ImageSource.camera);
+                  },
+                ),
+                const SizedBox(height: 4),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.secondary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.photo_library_rounded, color: AppColors.secondary, size: 22),
+                  ),
+                  title: Text('Photo Gallery', style: TextStyle(color: textPrimary, fontWeight: FontWeight.w600)),
+                  subtitle: Text('Select image folded to fit ~5s radio budget', style: TextStyle(color: subtitleColor, fontSize: 12)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _pickImage(ImageSource.gallery);
+                  },
+                ),
+                const SizedBox(height: 4),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.error.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.location_on_rounded, color: AppColors.error, size: 22),
+                  ),
+                  title: Text('Share GPS Location', style: TextStyle(color: textPrimary, fontWeight: FontWeight.w600)),
+                  subtitle: Text('Broadcast your live offline coordinates', style: TextStyle(color: subtitleColor, fontSize: 12)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _shareLocation();
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
           ),
         );
       },
     );
   }
 
-  /// Shrinks [src] until it fits [budget] bytes (~3 KB = ~22 LoRa packets).
-  /// Lowers JPEG quality first, then the image size, and returns the best attempt.
-  Future<Uint8List> compressToBudget(Uint8List src, {int budget = 3000}) async {
-    var side = 160;
-    var quality = 40;
-    Uint8List best = src;
-    while (side >= 64) {
-      final out = await FlutterImageCompress.compressWithList(
-        src,
-        minWidth: side,
-        minHeight: side,
-        quality: quality,
-        format: CompressFormat.jpeg, // WebP encoding is not supported on iOS
-      );
-      best = out;
-      if (out.length <= budget) return out;
-      quality -= 10;
-      if (quality < 15) {
-        quality = 40;
-        side -= 32;
-      }
-    }
-    return best;
-  }
-
+  /// One step: pick -> fold (automatic) -> send. The result is sized to arrive in ~5 seconds.
   Future<void> _pickImage(ImageSource source) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final picker = ImagePicker();
-      final pickedFile = await picker.pickImage(
+      final pickedFile = await ImagePicker().pickImage(
         source: source,
         maxWidth: 1024,
         maxHeight: 1024,
       );
       if (pickedFile == null || widget.onSendImage == null) return;
-
       final bytes = await pickedFile.readAsBytes();
-      final compressed = await compressToBudget(bytes);
-      final packets = (compressed.length / 140).ceil();
+      if (!mounted) return;
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+      FoldedImage folded;
+      try {
+        folded = await ImageFolder.fold(bytes);
+      } finally {
+        if (mounted) Navigator.of(context, rootNavigator: true).pop(); // close progress dialog
+      }
+
       messenger.showSnackBar(SnackBar(
         content: Text(
-            'Sending image: ${(compressed.length / 1024).toStringAsFixed(1)} KB (~$packets packets)'),
+          'Sending ${folded.description} · ${(folded.bytes.length / 1024).toStringAsFixed(1)} KB · '
+          '~${TransferConfig.estimateSeconds(folded.bytes.length)} s',
+        ),
       ));
-      widget.onSendImage!(compressed);
+      widget.onSendImage!(folded.bytes);
     } catch (e) {
       debugPrint('Image pick error: $e');
       messenger.showSnackBar(SnackBar(content: Text('Could not send image: $e')));
@@ -243,7 +291,7 @@ class _MessageBoxState extends State<MessageBox> {
     final dividerColor = AppColors.getDivider(context);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: cardBg,
         border: Border(
@@ -255,10 +303,11 @@ class _MessageBoxState extends State<MessageBox> {
           children: [
             // Attachment button
             IconButton(
-              tooltip: 'Attach File',
-              icon: const Text(
-                '📎',
-                style: TextStyle(fontSize: 22),
+              tooltip: 'Attach Media or Location',
+              icon: const Icon(
+                Icons.add_circle_outline_rounded,
+                color: AppColors.primary,
+                size: 26,
               ),
               onPressed: _handleAttachment,
             ),
@@ -269,18 +318,24 @@ class _MessageBoxState extends State<MessageBox> {
               child: Container(
                 decoration: BoxDecoration(
                   color: inputBg,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: cardBorder, width: 1),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: _isRecording ? AppColors.error : cardBorder,
+                    width: 1,
+                  ),
                 ),
                 child: TextField(
                   controller: _controller,
-                  style: TextStyle(color: textPrimary),
+                  style: TextStyle(color: textPrimary, fontSize: 15),
                   decoration: InputDecoration(
-                    hintText: _isRecording ? 'Recording...' : 'Message...',
-                    hintStyle: TextStyle(color: _isRecording ? AppColors.error : subtitleColor),
+                    hintText: _isRecording ? 'Recording voice note...' : 'Message mesh node...',
+                    hintStyle: TextStyle(
+                      color: _isRecording ? AppColors.error : subtitleColor,
+                      fontSize: 14,
+                    ),
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 16,
-                      vertical: 10,
+                      vertical: 9,
                     ),
                     border: InputBorder.none,
                   ),
@@ -288,39 +343,59 @@ class _MessageBoxState extends State<MessageBox> {
                 ),
               ),
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 6),
 
-            // Push-To-Talk Microphone (🎤)
+            // Push-To-Talk Microphone
             GestureDetector(
               onLongPressStart: (_) => _startRecording(),
               onLongPressEnd: (_) => _stopRecording(),
               onTap: () {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Hold the mic button to record voice')),
+                  const SnackBar(
+                    content: Text('Hold the mic button to record voice note'),
+                    duration: Duration(seconds: 2),
+                  ),
                 );
               },
               child: Container(
-                padding: const EdgeInsets.all(12),
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: _isRecording
+                      ? AppColors.error
+                      : AppColors.getCardBorder(context).withValues(alpha: 0.3),
+                  shape: BoxShape.circle,
+                ),
                 child: Icon(
-                  Icons.mic,
-                  color: _isRecording ? AppColors.error : textPrimary,
-                  size: 26,
+                  _isRecording ? Icons.mic : Icons.mic_none_rounded,
+                  color: _isRecording ? Colors.white : textPrimary,
+                  size: 22,
                 ),
               ),
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 6),
 
-            // Send Button (➤)
+            // Send Button
             Container(
-              decoration: const BoxDecoration(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
                 color: AppColors.primary,
                 shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.35),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: IconButton(
+                padding: EdgeInsets.zero,
                 icon: const Icon(
-                  Icons.send_rounded,
+                  Icons.arrow_upward_rounded,
                   color: Colors.black,
-                  size: 20,
+                  size: 22,
                 ),
                 onPressed: _handleSend,
               ),

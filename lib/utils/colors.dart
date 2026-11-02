@@ -2,34 +2,35 @@ import 'package:flutter/material.dart';
 
 /// AppColors encapsulates the RelayChat color theme for both Dark and Light modes.
 class AppColors {
-  // --- Dark Mode Palette ---
-  static const Color darkBackground = Color(0xFF121212);
-  static const Color darkCard = Color(0xFF1E1E1E);
-  static const Color darkCardBorder = Color(0xFF2A2A2A);
-  static const Color darkTextPrimary = Colors.white;
-  static const Color darkTextSecondary = Color(0xFFB0B0B0);
-  static const Color darkSubtitle = Color(0xFF9E9E9E);
-  static const Color darkDivider = Color(0xFF2C2C2C);
-  static const Color darkOutgoingBubble = Color(0xFF1B4D2E);
-  static const Color darkIncomingBubble = Color(0xFF252A34);
+  // --- Dark Mode Palette (Rich Obsidian & Slate) ---
+  static const Color darkBackground = Color(0xFF0A0F1D);
+  static const Color darkCard = Color(0xFF131B2E);
+  static const Color darkCardBorder = Color(0xFF1E293B);
+  static const Color darkTextPrimary = Color(0xFFF8FAFC);
+  static const Color darkTextSecondary = Color(0xFF94A3B8);
+  static const Color darkSubtitle = Color(0xFF64748B);
+  static const Color darkDivider = Color(0xFF1E293B);
+  static const Color darkOutgoingBubble = Color(0xFF065F46);
+  static const Color darkIncomingBubble = Color(0xFF1E293B);
 
-  // --- Light Mode Palette ---
-  static const Color lightBackground = Color(0xFFF4F6F9);
+  // --- Light Mode Palette (Clean Porcelain & Slate) ---
+  static const Color lightBackground = Color(0xFFF8FAFC);
   static const Color lightCard = Color(0xFFFFFFFF);
   static const Color lightCardBorder = Color(0xFFE2E8F0);
   static const Color lightTextPrimary = Color(0xFF0F172A);
   static const Color lightTextSecondary = Color(0xFF475569);
   static const Color lightSubtitle = Color(0xFF64748B);
   static const Color lightDivider = Color(0xFFE2E8F0);
-  static const Color lightOutgoingBubble = Color(0xFFDCF8C6);
-  static const Color lightIncomingBubble = Color(0xFFF1F5F9);
+  static const Color lightOutgoingBubble = Color(0xFFD1FAE5);
+  static const Color lightIncomingBubble = Color(0xFFFFFFFF);
 
   // --- Shared Brand Accents ---
-  static const Color primary = Color(0xFF00C853);
-  static const Color primaryDark = Color(0xFF009624);
-  static const Color secondary = Color(0xFF2979FF);
-  static const Color secondaryDark = Color(0xFF004ECB);
-  static const Color error = Color(0xFFFF5252);
+  static const Color primary = Color(0xFF10B981); // Emerald Green
+  static const Color primaryDark = Color(0xFF059669);
+  static const Color primaryLight = Color(0xFF34D399);
+  static const Color secondary = Color(0xFF3B82F6); // Electric Blue
+  static const Color secondaryDark = Color(0xFF2563EB);
+  static const Color error = Color(0xFFEF4444);
 
   // --- Dynamic Color Getters based on BuildContext / Brightness ---
   static bool isDark(BuildContext context) =>
@@ -62,9 +63,9 @@ class AppColors {
   static Color getIncomingBubble(BuildContext context) =>
       isDark(context) ? darkIncomingBubble : lightIncomingBubble;
 
-  static const Color statusGreen = Color(0xFF00E676);
-  static const Color statusRed = Color(0xFFFF5252);
-  static const Color statusOrange = Color(0xFFFFAB00);
+  static const Color statusGreen = Color(0xFF10B981);
+  static const Color statusRed = Color(0xFFEF4444);
+  static const Color statusOrange = Color(0xFFF59E0B);
 
   // Backward compatibility static constants
   static const Color background = darkBackground;

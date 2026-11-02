@@ -21,20 +21,19 @@ class DeviceCard extends StatelessWidget {
     final cardBg = AppColors.getCard(context);
     final cardBorder = AppColors.getCardBorder(context);
     final textPrimary = AppColors.getTextPrimary(context);
-    final textSecondary = AppColors.getTextSecondary(context);
     final subtitleColor = AppColors.getSubtitle(context);
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: cardBg,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: cardBorder, width: 1),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: AppColors.isDark(context) ? 0.3 : 0.06),
-            blurRadius: 10,
+            color: Colors.black.withValues(alpha: AppColors.isDark(context) ? 0.3 : 0.05),
+            blurRadius: 12,
             offset: const Offset(0, 4),
           ),
         ],
@@ -47,65 +46,83 @@ class DeviceCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  const Text(
-                    '📡',
-                    style: TextStyle(fontSize: 22),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    device.name,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: textPrimary,
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
                     ),
+                    child: const Icon(
+                      Icons.router_rounded,
+                      color: AppColors.primary,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        device.name,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'ESP-NOW Mesh Bridge',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: subtitleColor,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
               StatusBadge(
-                label: device.isAvailable ? 'Available' : 'Busy',
+                label: device.isAvailable ? 'Ready' : 'Busy',
                 isPositive: device.isAvailable,
               ),
             ],
           ),
           const SizedBox(height: 14),
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Signal: ',
-                style: TextStyle(
-                  color: textSecondary,
-                  fontSize: 14,
-                ),
+              Row(
+                children: [
+                  const Icon(Icons.signal_cellular_alt_rounded, color: AppColors.primary, size: 16),
+                  const SizedBox(width: 6),
+                  Text(
+                    device.signalBar,
+                    style: const TextStyle(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${device.rssi} dBm',
+                    style: TextStyle(
+                      color: subtitleColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
-              Text(
-                device.signalBar,
-                style: const TextStyle(
-                  color: AppColors.primary,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '(${device.rssi} dBm)',
-                style: TextStyle(
-                  color: subtitleColor,
-                  fontSize: 12,
-                ),
+              AppButton(
+                label: 'Connect',
+                onPressed: onConnect,
+                isLoading: isConnecting,
+                style: AppButtonStyle.primary,
               ),
             ],
-          ),
-          const SizedBox(height: 16),
-          Align(
-            alignment: Alignment.centerRight,
-            child: AppButton(
-              label: 'Connect',
-              onPressed: onConnect,
-              isLoading: isConnecting,
-              style: AppButtonStyle.primary,
-            ),
           ),
         ],
       ),

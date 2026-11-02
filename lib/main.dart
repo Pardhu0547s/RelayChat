@@ -15,6 +15,7 @@ import 'screens/profile/profile_setup_screen.dart';
 import 'screens/splash/splash_screen.dart';
 import 'utils/colors.dart';
 import 'utils/constants.dart';
+import 'widgets/sos_alarm_banner.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -67,6 +68,15 @@ class RelayChatApp extends StatelessWidget {
               textTheme: GoogleFonts.interTextTheme(
                 ThemeData.dark().textTheme,
               ),
+            ),
+
+            // Banner floats above every screen while an incoming SOS alarm rings.
+            builder: (context, child) => Stack(
+              fit: StackFit.expand,
+              children: [
+                ?child,
+                const SosAlarmBanner(),
+              ],
             ),
 
             initialRoute: AppConstants.routeSplash,

@@ -5,6 +5,7 @@ import '../../providers/theme_provider.dart';
 import '../../utils/colors.dart';
 import '../../utils/constants.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/brand_logo.dart';
 import '../../widgets/status_badge.dart';
 
 class BluetoothStatusScreen extends StatefulWidget {
@@ -68,12 +69,20 @@ class _BluetoothStatusScreenState extends State<BluetoothStatusScreen> with Widg
           appBar: AppBar(
             backgroundColor: AppColors.getBackground(context),
             elevation: 0,
-            title: Text(
-              'Bluetooth Status',
-              style: TextStyle(
-                color: textPrimary,
-                fontWeight: FontWeight.bold,
-              ),
+            title: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const BrandLogo(size: 28),
+                const SizedBox(width: 10),
+                Text(
+                  'RelayChat',
+                  style: TextStyle(
+                    color: textPrimary,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+              ],
             ),
             centerTitle: true,
             actions: [
@@ -100,9 +109,39 @@ class _BluetoothStatusScreenState extends State<BluetoothStatusScreen> with Widg
               children: [
                 const Spacer(),
                 
+                // Hero Logo & Subtitle
+                Center(
+                  child: Column(
+                    children: [
+                      const BrandLogo(size: 64, showGlow: true),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Radio Hardware Setup',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: textPrimary,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'RelayChat communicates with your ESP32\nbridge over Bluetooth Low Energy.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: AppColors.getSubtitle(context),
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 28),
+
                 // Status Card
                 Container(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: cardBg,
                     borderRadius: BorderRadius.circular(20),
@@ -121,37 +160,79 @@ class _BluetoothStatusScreenState extends State<BluetoothStatusScreen> with Widg
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // Bluetooth Section
-                      Text(
-                        'Bluetooth',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      StatusBadge(
-                        label: isEnabled ? 'Enabled' : 'OFF',
-                        isPositive: isEnabled,
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(
+                                  Icons.bluetooth,
+                                  color: AppColors.primary,
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                'Bluetooth Radio',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                          StatusBadge(
+                            label: isEnabled ? 'Enabled' : 'OFF',
+                            isPositive: isEnabled,
+                          ),
+                        ],
                       ),
                       
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 16),
                       Divider(color: dividerColor),
                       const SizedBox(height: 16),
 
                       // Permissions Section
-                      Text(
-                        'Permissions',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      StatusBadge(
-                        label: isGranted ? 'Granted' : 'Denied',
-                        isPositive: isGranted,
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: AppColors.secondary.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(
+                                  Icons.security_rounded,
+                                  color: AppColors.secondary,
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                'BLE Permissions',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                          StatusBadge(
+                            label: isGranted ? 'Granted' : 'Denied',
+                            isPositive: isGranted,
+                          ),
+                        ],
                       ),
                     ],
                   ),

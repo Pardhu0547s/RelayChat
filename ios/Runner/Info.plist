@@ -8,6 +8,14 @@
 	<string>RelayChat needs Bluetooth to connect to the ESP32 mesh router.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>RelayChat needs the microphone to record voice messages.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>RelayChat needs the camera to take photos and scan paper notes.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>RelayChat needs photo access to pick images and save received ones.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>RelayChat saves received images to your photo library.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>RelayChat uses your location only when you choose to share it.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

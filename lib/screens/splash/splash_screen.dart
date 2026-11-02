@@ -6,6 +6,7 @@ import '../../providers/chat_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/colors.dart';
 import '../../utils/constants.dart';
+import '../../widgets/brand_logo.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -108,86 +109,109 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) {
+    final isDark = AppColors.isDark(context);
+    final bg = AppColors.getBackground(context);
+    final textPrimary = AppColors.getTextPrimary(context);
+    final subtitleColor = AppColors.getSubtitle(context);
+
     return Scaffold(
-      backgroundColor: AppColors.background,
-      body: Center(
-        child: FadeTransition(
-          opacity: _fadeAnimation,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // RelayChat Logo
-              Container(
-                width: 140,
-                height: 140,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.card,
-                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.5), width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primary.withValues(alpha: 0.3),
-                      blurRadius: 20,
-                      spreadRadius: 2,
-                    ),
+      backgroundColor: bg,
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: isDark
+                ? [
+                    const Color(0xFF0F172A),
+                    const Color(0xFF0A0F1D),
+                    const Color(0xFF050811),
+                  ]
+                : [
+                    const Color(0xFFFFFFFF),
+                    const Color(0xFFF1F5F9),
+                    const Color(0xFFE2E8F0),
                   ],
+          ),
+        ),
+        child: Center(
+          child: FadeTransition(
+            opacity: _fadeAnimation,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // RelayChat Glowing Brand Logo
+                const BrandLogo(
+                  size: 130,
+                  showGlow: true,
                 ),
-                child: Image.asset(
-                  AppConstants.logoPath,
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Icon(
-                      Icons.cell_tower,
-                      size: 70,
+                const SizedBox(height: 28),
+
+                // Title
+                Text(
+                  AppConstants.appName,
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.w800,
+                    color: textPrimary,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 6),
+
+                // Tagline with sleek pill badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.3),
+                      width: 1,
+                    ),
+                  ),
+                  child: const Text(
+                    'OFF-GRID MESH NETWORK',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
                       color: AppColors.primary,
-                    );
-                  },
+                      letterSpacing: 1.2,
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 32),
+                const SizedBox(height: 8),
+                Text(
+                  AppConstants.appTagline,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: subtitleColor,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                const SizedBox(height: 50),
 
-              // Title
-              const Text(
-                AppConstants.appName,
-                style: TextStyle(
-                  fontSize: 34,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
-                  letterSpacing: 1.5,
+                // Loading...
+                Container(
+                  width: 32,
+                  height: 32,
+                  padding: const EdgeInsets.all(4),
+                  child: const CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-
-              // Subtitle
-              const Text(
-                AppConstants.appTagline,
-                style: TextStyle(
-                  fontSize: 16,
-                  color: AppColors.subtitle,
-                  letterSpacing: 0.5,
+                const SizedBox(height: 14),
+                Text(
+                  _statusText,
+                  style: TextStyle(
+                    color: subtitleColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 60),
-
-              // Loading...
-              const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.5,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                _statusText,
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 14,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

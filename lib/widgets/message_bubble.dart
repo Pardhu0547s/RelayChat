@@ -5,6 +5,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/message.dart';
 import '../utils/colors.dart';
+import 'image_viewer.dart';
 
 class MessageBubble extends StatefulWidget {
   final ChatMessage message;
@@ -106,51 +107,51 @@ class _MessageBubbleState extends State<MessageBubble> {
     final isImage = message.type == MessageType.image;
 
     final bg = isSos 
-        ? Colors.redAccent.withValues(alpha: isDark ? 0.4 : 0.2)
+        ? (isDark ? const Color(0xFF450A0A) : const Color(0xFFFEE2E2))
         : isOutgoing
             ? AppColors.getOutgoingBubble(context)
             : AppColors.getIncomingBubble(context);
 
     final textPrimary = isSos
-        ? (isDark ? Colors.red.shade200 : Colors.red.shade900)
+        ? (isDark ? const Color(0xFFFCA5A5) : const Color(0xFF991B1B))
         : isOutgoing && !isDark
-            ? const Color(0xFF0F5132)
+            ? const Color(0xFF064E3B)
             : AppColors.getTextPrimary(context);
 
     final subtitleColor = isSos
-        ? (isDark ? Colors.red.shade300 : Colors.red.shade700)
+        ? (isDark ? const Color(0xFFF87171) : const Color(0xFFB91C1C))
         : isOutgoing && !isDark
-            ? const Color(0xFF198754)
+            ? const Color(0xFF059669)
             : AppColors.getSubtitle(context);
 
     return Align(
       alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
         ),
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isOutgoing ? 16 : 4),
-            bottomRight: Radius.circular(isOutgoing ? 4 : 16),
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: Radius.circular(isOutgoing ? 18 : 4),
+            bottomRight: Radius.circular(isOutgoing ? 4 : 18),
           ),
           border: Border.all(
             color: isSos 
-                ? Colors.redAccent.withValues(alpha: 0.5)
+                ? Colors.redAccent.withValues(alpha: 0.6)
                 : isOutgoing
-                    ? AppColors.primary.withValues(alpha: 0.3)
+                    ? AppColors.primary.withValues(alpha: isDark ? 0.25 : 0.4)
                     : AppColors.getCardBorder(context),
             width: 1,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.05),
-              blurRadius: 4,
+              color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
+              blurRadius: 6,
               offset: const Offset(0, 2),
             ),
           ],
@@ -160,62 +161,142 @@ class _MessageBubbleState extends State<MessageBubble> {
               isOutgoing ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (isVoice)
+            if (isSos) ...[
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  IconButton(
-                    icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: textPrimary),
-                    onPressed: _togglePlay,
-                  ),
-                  const SizedBox(width: 8),
+                  const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 16),
+                  const SizedBox(width: 4),
                   Text(
-                    _formatDuration(_position) + " / " + _formatDuration(_duration),
-                    style: TextStyle(color: textPrimary, fontSize: 14),
+                    'EMERGENCY SOS',
+                    style: TextStyle(
+                      color: isDark ? Colors.red.shade300 : Colors.red.shade800,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 11,
+                      letterSpacing: 0.8,
+                    ),
                   ),
                 ],
-              )
-            else if (isLocation)
-              GestureDetector(
-                onTap: () => _openLocation(message.text),
+              ),
+              const SizedBox(height: 4),
+            ],
+            if (isVoice)
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.location_on, color: Colors.redAccent),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            'Location Shared',
-                            style: TextStyle(
-                              color: textPrimary,
-                              fontSize: 16,
-                              decoration: TextDecoration.underline,
-                            ),
-                          ),
-                          // Raw coordinates stay readable even with no map app / no internet.
-                          SelectableText(
-                            message.text,
-                            style: TextStyle(color: subtitleColor, fontSize: 12),
-                          ),
-                        ],
+                    InkWell(
+                      onTap: _togglePlay,
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          color: textPrimary,
+                          size: 22,
+                        ),
                       ),
+                    ),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Voice Note',
+                          style: TextStyle(
+                            color: textPrimary,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          "${_formatDuration(_position)} / ${_formatDuration(_duration)}",
+                          style: TextStyle(color: subtitleColor, fontSize: 11),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               )
-            else if (isImage)
-              ClipRRect(
+            else if (isLocation)
+              InkWell(
+                onTap: () => _openLocation(message.text),
                 borderRadius: BorderRadius.circular(8),
-                child: Image.file(
-                  File(message.text),
-                  width: 150,
-                  height: 150,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) => Icon(Icons.broken_image, size: 50, color: textPrimary),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.location_on_rounded, color: Colors.redAccent, size: 22),
+                      ),
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Shared Location',
+                              style: TextStyle(
+                                color: textPrimary,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              message.text,
+                              style: TextStyle(color: subtitleColor, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else if (isImage)
+              GestureDetector(
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => ImageViewerScreen(path: message.text)),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      Image.file(
+                        File(message.text),
+                        width: 210,
+                        fit: BoxFit.fitWidth,
+                        filterQuality: FilterQuality.high,
+                        errorBuilder: (context, error, stackTrace) =>
+                            Icon(Icons.broken_image, size: 50, color: textPrimary),
+                      ),
+                      Container(
+                        margin: const EdgeInsets.all(6),
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.fullscreen_rounded, size: 16, color: Colors.white),
+                      ),
+                    ],
+                  ),
                 ),
               )
             else
@@ -223,11 +304,11 @@ class _MessageBubbleState extends State<MessageBubble> {
                 message.text,
                 style: TextStyle(
                   color: textPrimary,
-                  fontSize: 16,
-                  height: 1.3,
+                  fontSize: 15,
+                  height: 1.35,
                 ),
               ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 5),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -236,16 +317,19 @@ class _MessageBubbleState extends State<MessageBubble> {
                   style: TextStyle(
                     color: subtitleColor,
                     fontSize: 10,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
                 if (isOutgoing) ...[
                   const SizedBox(width: 4),
                   Icon(
                     message.status == MessageStatus.delivered
-                        ? Icons.done_all
-                        : (message.status == MessageStatus.sending ? Icons.access_time : Icons.done),
-                    size: 13,
-                    color: isDark ? AppColors.primary : const Color(0xFF198754),
+                        ? Icons.done_all_rounded
+                        : (message.status == MessageStatus.sending
+                            ? Icons.access_time_rounded
+                            : Icons.done_rounded),
+                    size: 14,
+                    color: isDark ? AppColors.primary : const Color(0xFF059669),
                   ),
                 ],
               ],

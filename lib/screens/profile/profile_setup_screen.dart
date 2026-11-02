@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../utils/colors.dart';
 import '../../utils/constants.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../../widgets/brand_logo.dart';
 
 class ProfileSetupScreen extends StatefulWidget {
   const ProfileSetupScreen({super.key});
@@ -43,56 +43,63 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(
-                  Icons.person_pin_rounded,
+                const BrandLogo(
                   size: 100,
-                  color: AppColors.primary,
+                  showGlow: true,
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 28),
                 Text(
-                  'Create Profile',
+                  'Join the Mesh',
                   style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
                     color: textPrimary,
+                    letterSpacing: 0.5,
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'What should other mesh nodes call you?',
+                  'Choose a display name so nearby RelayChat nodes can recognize you.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     color: subtitleColor,
+                    height: 1.4,
                   ),
                 ),
-                const SizedBox(height: 48),
+                const SizedBox(height: 36),
                 TextField(
                   controller: _nameController,
                   maxLength: 20,
                   textCapitalization: TextCapitalization.words,
-                  style: TextStyle(color: textPrimary, fontSize: 18),
+                  style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w600),
                   decoration: InputDecoration(
-                    hintText: 'Enter Display Name',
-                    hintStyle: TextStyle(color: subtitleColor),
+                    labelText: 'Display Name',
+                    labelStyle: TextStyle(color: subtitleColor),
+                    hintText: 'e.g. Alex or Scout-1',
+                    hintStyle: TextStyle(color: subtitleColor.withValues(alpha: 0.6)),
                     filled: true,
                     fillColor: AppColors.getCard(context),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide.none,
+                      borderSide: BorderSide(color: AppColors.getCardBorder(context)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide(color: AppColors.getCardBorder(context)),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(16),
                       borderSide: const BorderSide(color: AppColors.primary, width: 2),
                     ),
-                    prefixIcon: const Icon(Icons.badge, color: AppColors.primary),
+                    prefixIcon: const Icon(Icons.person_rounded, color: AppColors.primary),
                   ),
                   onSubmitted: (_) => _saveProfile(),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
                 SizedBox(
                   width: double.infinity,
-                  height: 56,
+                  height: 52,
                   child: ElevatedButton(
                     onPressed: _saveProfile,
                     style: ElevatedButton.styleFrom(
@@ -101,11 +108,18 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      elevation: 4,
+                      elevation: 2,
                     ),
-                    child: const Text(
-                      'Continue',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          'Enter Mesh',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        SizedBox(width: 8),
+                        Icon(Icons.arrow_forward_rounded, size: 20),
+                      ],
                     ),
                   ),
                 ),
